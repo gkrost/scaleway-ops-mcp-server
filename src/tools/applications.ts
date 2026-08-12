@@ -13,15 +13,37 @@ interface Application {
   updated_at: string;
   editable: boolean;
   nb_api_keys: number;
+  tags?: string[];
 }
 
 const createSchema = {
   name: z
     .string()
     .min(1)
-    .max(200)
-    .describe("Application name. Convention in this org: '<purpose>-least-privilege' for narrowly-scoped operational identities."),
-  description: z.string().max(1000).optional().describe("What this Application is for and why - shown in the console, helps future readers."),
+    .max(64)
+    .describe(
+      "Application name (max 64 chars, Scaleway API limit). Convention in this org: '<env>-<scope>-<level>' for " +
+        "service credentials held by deployed code (e.g. 'dev-zvg-files-rw'), 'ops-<name>-<level>' for operator/tool " +
+        "identities that administer the account directly (e.g. 'ops-scaleway-mcp-admin'). env ∈ {prod,dev,local,ci,shared}, " +
+        "level ∈ {ro,rw,admin,full}. Name must describe the grant that actually exists, not the one intended.",
+    ),
+  description: z.string().max(200).optional().describe("What this Application is for and why - shown in the console, helps future readers."),
+};
+
+const updateSchema = {
+  application_id: z.string().uuid(),
+  name: z.string().min(1).max(64).optional().describe("New name (max 64 chars) - see scaleway_iam_create_application's description for the naming convention."),
+  description: z.string().max(200).optional(),
+  tags: z
+    .array(z.string())
+    .max(10)
+    .optional()
+    .describe(
+      "Structured metadata, max 10. Locked vocabulary in this org: 'env:{prod|dev|local|ci|shared}', " +
+        "'access:{ro|rw|admin|full}', 'owner:<team-or-tool>', 'issue:<n>', 'managed-by:{mcp|manual|terraform}'. " +
+        "REPLACES the full tag list (same semantics as scaleway_s3_put_bucket_policy replacing the whole policy " +
+        "document) - pass the complete set you want, not just the ones you're adding.",
+    ),
 };
 
 const listSchema = {
@@ -55,6 +77,30 @@ export function registerApplications(server: McpServer, config: Config) {
           name,
           description,
           organization_id: config.SCW_ORGANIZATION_ID,
+        });
+        return toolJsonResult(app, config.MAX_OUTPUT_CHARS);
+      }),
+  );
+
+  server.registerTool(
+    "scaleway_iam_update_application",
+    {
+      title: "Update Scaleway IAM Application",
+      description:
+        "Rename/re-describe/re-tag an existing IAM Application. Only the id is fixed - name, description and tags " +
+        "are all safe to change at any time: nothing else in Scaleway references an Application by name (Bucket " +
+        "Policies and API keys reference application_id, never the name), so renaming never breaks a live " +
+        "credential or requires touching anything downstream. Only the fields you pass are changed; omitted " +
+        "fields are left as-is.",
+      inputSchema: updateSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ application_id, name, description, tags }) =>
+      withIamErrorHandling(async () => {
+        const app = await iamRequest<Application>(config, "PATCH", `/applications/${application_id}`, {
+          name,
+          description,
+          tags,
         });
         return toolJsonResult(app, config.MAX_OUTPUT_CHARS);
       }),

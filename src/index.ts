@@ -7,6 +7,7 @@ import { registerApiKeys } from "./tools/apiKeys.js";
 import { registerPolicies } from "./tools/policies.js";
 import { registerPermissionSets } from "./tools/permissionSets.js";
 import { registerBucketPolicies } from "./tools/bucketPolicies.js";
+import { registerAuditTrail } from "./tools/auditTrail.js";
 
 const config = loadConfig();
 
@@ -20,6 +21,7 @@ registerApiKeys(server, config);
 registerPolicies(server, config);
 registerPermissionSets(server, config);
 registerBucketPolicies(server, config);
+registerAuditTrail(server, config);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

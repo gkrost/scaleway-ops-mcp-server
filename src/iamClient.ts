@@ -44,7 +44,7 @@ function formatIamErrorBody(status: number, body: unknown): string {
 
 export async function iamRequest<T>(
   config: Config,
-  method: "GET" | "POST" | "PATCH" | "DELETE",
+  method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
   path: string,
   body?: unknown,
 ): Promise<T> {

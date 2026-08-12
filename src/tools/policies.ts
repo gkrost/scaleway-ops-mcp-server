@@ -22,7 +22,10 @@ interface Policy {
   created_at: string;
   updated_at: string;
   editable: boolean;
-  rules: Rule[];
+  /** NOT populated by GET/list responses despite being part of create's request body - confirmed empirically
+   *  2026-08-12. Rules live at the separate /policies/{id}/rules endpoint - see list_policy_rules below. */
+  rules?: Rule[];
+  tags?: string[];
 }
 
 const ruleSchema = z
@@ -44,8 +47,17 @@ const ruleSchema = z
   .describe("Exactly one of project_ids/organization_id should be set, matching the scope_type of this rule's permission sets.");
 
 const createSchema = {
-  name: z.string().min(1).max(200),
-  description: z.string().max(1000).optional(),
+  name: z
+    .string()
+    .min(1)
+    .max(64)
+    .describe(
+      "Policy name (max 64 chars, Scaleway API limit). Convention in this org: match the principal Application's " +
+        "own name 1:1 (e.g. Application 'dev-zvg-files-rw' -> Policy 'dev-zvg-files-rw'). When one Application " +
+        "genuinely needs two policies (Scaleway's rule scope_type restriction - see scaleway_iam_list_permission_sets), " +
+        "suffix the second with what it specifically adds, not a restatement of the app name.",
+    ),
+  description: z.string().max(200).optional(),
   application_id: z.string().uuid().optional().describe("Attach this policy to an Application. Omit application_id/user_id/group_id to create a policy with no principal yet."),
   user_id: z.string().uuid().optional(),
   group_id: z.string().uuid().optional(),
@@ -55,12 +67,45 @@ const createSchema = {
     .describe("One rule per scope_type needed. E.g. one rule with organization_id + ['IAMPolicyManager'], a second with project_ids + ['ObjectStorageFullAccess']."),
 };
 
+const updateSchema = {
+  policy_id: z.string().uuid(),
+  name: z.string().min(1).max(64).optional().describe("New name (max 64 chars) - see scaleway_iam_create_policy's description for the naming convention."),
+  description: z.string().max(200).optional(),
+  tags: z
+    .array(z.string())
+    .max(10)
+    .optional()
+    .describe(
+      "Structured metadata, max 10. Locked vocabulary in this org: 'env:{prod|dev|local|ci|shared}', " +
+        "'access:{ro|rw|admin|full}', 'owner:<team-or-tool>', 'issue:<n>', 'managed-by:{mcp|manual|terraform}'. " +
+        "REPLACES the full tag list - pass the complete set you want, not just the ones you're adding. Does NOT " +
+        "touch rules, application_id, or any other principal/permission field.",
+    ),
+};
+
 const listSchema = {
   application_id: z.string().uuid().optional().describe("Filter to policies attached to one Application."),
 };
 
 const getSchema = {
   policy_id: z.string().uuid(),
+};
+
+const rulesIdSchema = {
+  policy_id: z.string().uuid(),
+};
+
+const setRulesSchema = {
+  policy_id: z.string().uuid(),
+  rules: z
+    .array(ruleSchema)
+    .min(1)
+    .describe(
+      "The COMPLETE rules array to set - this REPLACES every existing rule on the policy, it does not merge or " +
+        "append. Call scaleway_iam_list_policy_rules first, add/remove/edit within that array, then pass the " +
+        "whole thing back here. This is the safe way to change a live policy's grants: unlike delete+recreate, " +
+        "there's no window where the policy (or the permissions it grants its own holder) doesn't exist.",
+    ),
 };
 
 const deleteSchema = {
@@ -99,6 +144,29 @@ export function registerPolicies(server: McpServer, config: Config) {
   );
 
   server.registerTool(
+    "scaleway_iam_update_policy",
+    {
+      title: "Update Scaleway IAM Policy",
+      description:
+        "Rename/re-describe/re-tag an existing IAM Policy. Does NOT touch rules, application_id, or any other " +
+        "principal/permission field - only name, description, tags change, so this never alters what the policy " +
+        "grants or to whom. Nothing references a Policy by name, so renaming is always safe. Only the fields you " +
+        "pass are changed; omitted fields are left as-is.",
+      inputSchema: updateSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ policy_id, name, description, tags }) =>
+      withIamErrorHandling(async () => {
+        const policy = await iamRequest<Policy>(config, "PATCH", `/policies/${policy_id}`, {
+          name,
+          description,
+          tags,
+        });
+        return toolJsonResult(policy, config.MAX_OUTPUT_CHARS);
+      }),
+  );
+
+  server.registerTool(
     "scaleway_iam_list_policies",
     {
       title: "List Scaleway IAM Policies",
@@ -120,7 +188,10 @@ export function registerPolicies(server: McpServer, config: Config) {
     "scaleway_iam_get_policy",
     {
       title: "Get Scaleway IAM Policy",
-      description: "Get one IAM Policy by id, including its full rules array (permission sets + scope per rule).",
+      description:
+        "Get one IAM Policy's metadata (name, description, tags, application_id, nb_rules count) by id. Does NOT " +
+        "return the actual rules array - confirmed empirically that Scaleway's GET here never populates it despite " +
+        "create accepting rules in its request body. Call scaleway_iam_list_policy_rules for the real rules.",
       inputSchema: getSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -128,6 +199,43 @@ export function registerPolicies(server: McpServer, config: Config) {
       withIamErrorHandling(async () => {
         const policy = await iamRequest<Policy>(config, "GET", `/policies/${policy_id}`);
         return toolJsonResult(policy, config.MAX_OUTPUT_CHARS);
+      }),
+  );
+
+  server.registerTool(
+    "scaleway_iam_list_policy_rules",
+    {
+      title: "List rules on a Scaleway IAM Policy",
+      description:
+        "Get the actual rules (permission sets + scope, each as project_ids or organization_id) attached to a " +
+        "Policy. Use this, not scaleway_iam_get_policy, to see what a policy really grants.",
+      inputSchema: rulesIdSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ policy_id }) =>
+      withIamErrorHandling(async () => {
+        const data = await iamRequest<{ rules: Rule[]; total_count: number }>(config, "GET", `/rules?policy_id=${policy_id}`);
+        return toolJsonResult(data, config.MAX_OUTPUT_CHARS);
+      }),
+  );
+
+  server.registerTool(
+    "scaleway_iam_set_policy_rules",
+    {
+      title: "Set rules on a Scaleway IAM Policy",
+      description:
+        "Overwrite the COMPLETE rules array on an existing Policy in one atomic call - the safe way to add or " +
+        "remove a permission set on a live policy. Prefer this over delete+recreate: deleting a policy that " +
+        "grants its own holder IAMPolicyManager revokes that permission the instant it's deleted, before a " +
+        "replacement can be created, which can lock the credential you're using out of IAM entirely. Call " +
+        "scaleway_iam_list_policy_rules first to get the current array before changing it.",
+      inputSchema: setRulesSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ policy_id, rules }) =>
+      withIamErrorHandling(async () => {
+        const data = await iamRequest<{ rules: Rule[] }>(config, "PUT", `/rules`, { policy_id, rules });
+        return toolJsonResult(data, config.MAX_OUTPUT_CHARS);
       }),
   );
 
