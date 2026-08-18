@@ -318,5 +318,117 @@ if (createdRule.isError) {
   console.log("verify gone: rule no longer in list_custom_alert_rules");
 }
 
+console.log("\n=== BUCKET CONFIG (issue #7): full config lifecycle on a throwaway bucket ===");
+const cfgBucket = `mcp-smoke-test-config-${Date.now()}`;
+expectJson(await client.callTool({ name: "scaleway_s3_create_bucket", arguments: { bucket: cfgBucket } }), "create config bucket");
+
+async function expectError(name, args, label) {
+  const res = await client.callTool({ name, arguments: args });
+  if (!res.isError) {
+    console.error(`FAILED at "${label}": expected an error, got success`);
+    process.exit(1);
+  }
+  console.log(`guard ok (${label}): ${text(res).slice(0, 110)}`);
+  return text(res);
+}
+
+try {
+  // --- tagging ---
+  const tags = expectJson(
+    await client.callTool({
+      name: "scaleway_s3_put_bucket_tagging",
+      arguments: { bucket: cfgBucket, tags: [{ key: "purpose", value: "smoke-test" }, { key: "owner", value: "mcp" }] },
+    }),
+    "put_bucket_tagging",
+  );
+  console.log("tagging applied:", tags.applied);
+  const tagsBack = expectJson(await client.callTool({ name: "scaleway_s3_get_bucket_tagging", arguments: { bucket: cfgBucket } }), "get_bucket_tagging");
+  if (tagsBack.tags.length !== 2) { console.error("FAILED: get_bucket_tagging echo mismatch"); process.exit(1); }
+  console.log("tagging get: 2/2 tags echoed");
+  console.log("tagging delete:", text(await client.callTool({ name: "scaleway_s3_delete_bucket_tagging", arguments: { bucket: cfgBucket, confirm: true } })).slice(0, 80));
+  await expectError("scaleway_s3_get_bucket_tagging", { bucket: cfgBucket }, "no tags after delete");
+
+  // --- CORS ---
+  expectJson(
+    await client.callTool({
+      name: "scaleway_s3_put_bucket_cors",
+      arguments: { bucket: cfgBucket, rules: [{ allowed_origins: ["https://example.com"], allowed_methods: ["GET"], max_age_seconds: 900 }] },
+    }),
+    "put_bucket_cors",
+  );
+  const cors = expectJson(await client.callTool({ name: "scaleway_s3_get_bucket_cors", arguments: { bucket: cfgBucket } }), "get_bucket_cors");
+  if (cors.rules.length !== 1 || cors.rules[0].allowed_origins[0] !== "https://example.com") { console.error("FAILED: cors echo mismatch"); process.exit(1); }
+  console.log("cors get: rule echoed");
+  console.log("cors delete:", text(await client.callTool({ name: "scaleway_s3_delete_bucket_cors", arguments: { bucket: cfgBucket } })).slice(0, 80));
+
+  // --- versioning: enable -> verify -> suspend-guard -> suspend -> verify ---
+  console.log("versioning enable:", text(await client.callTool({ name: "scaleway_s3_set_bucket_versioning", arguments: { bucket: cfgBucket, status: "Enabled" } })).slice(0, 80));
+  let v = expectJson(await client.callTool({ name: "scaleway_s3_get_bucket_versioning", arguments: { bucket: cfgBucket } }), "get versioning");
+  if (v.status !== "Enabled") { console.error("FAILED: versioning not Enabled"); process.exit(1); }
+  await expectError("scaleway_s3_set_bucket_versioning", { bucket: cfgBucket, status: "Suspended" }, "suspend without confirm rejected");
+  console.log("versioning suspend:", text(await client.callTool({ name: "scaleway_s3_set_bucket_versioning", arguments: { bucket: cfgBucket, status: "Suspended", confirm: true } })).slice(0, 80));
+  v = expectJson(await client.callTool({ name: "scaleway_s3_get_bucket_versioning", arguments: { bucket: cfgBucket } }), "get versioning after suspend");
+  if (v.status !== "Suspended") { console.error("FAILED: versioning not Suspended"); process.exit(1); }
+  console.log("versioning: enable -> suspend verified");
+  console.log("versioning re-enable:", text(await client.callTool({ name: "scaleway_s3_set_bucket_versioning", arguments: { bucket: cfgBucket, status: "Enabled" } })).slice(0, 80));
+
+  // --- website ---
+  console.log("website put:", text(await client.callTool({ name: "scaleway_s3_put_bucket_website", arguments: { bucket: cfgBucket, index_document: "index.html", error_document: "error.html", confirm: true } })).slice(0, 90));
+  const site = expectJson(await client.callTool({ name: "scaleway_s3_get_bucket_website", arguments: { bucket: cfgBucket } }), "get_bucket_website");
+  if (site.index_document !== "index.html" || site.error_document !== "error.html") { console.error("FAILED: website echo mismatch"); process.exit(1); }
+  console.log("website get: index+error echoed");
+  console.log("website delete:", text(await client.callTool({ name: "scaleway_s3_delete_bucket_website", arguments: { bucket: cfgBucket } })).slice(0, 80));
+
+  // --- visibility ---
+  const vis0 = expectJson(await client.callTool({ name: "scaleway_s3_get_bucket_visibility", arguments: { bucket: cfgBucket } }), "get visibility initial");
+  if (vis0.visibility !== "private") { console.error("FAILED: new bucket not private"); process.exit(1); }
+  await expectError("scaleway_s3_set_bucket_visibility", { bucket: cfgBucket, visibility: "public-read" }, "public without confirm rejected");
+  console.log("visibility public:", text(await client.callTool({ name: "scaleway_s3_set_bucket_visibility", arguments: { bucket: cfgBucket, visibility: "public-read", confirm: true } })).slice(0, 80));
+  const vis1 = expectJson(await client.callTool({ name: "scaleway_s3_get_bucket_visibility", arguments: { bucket: cfgBucket } }), "get visibility public");
+  if (vis1.visibility !== "public") { console.error("FAILED: visibility not public after set"); process.exit(1); }
+  console.log("visibility: private -> public verified (AllUsers grant present:", JSON.stringify(vis1.grants.some((g) => g.grantee?.includes("AllUsers"))), ")");
+  console.log("visibility private again:", text(await client.callTool({ name: "scaleway_s3_set_bucket_visibility", arguments: { bucket: cfgBucket, visibility: "private" } })).slice(0, 80));
+
+  // --- lifecycle ---
+  expectJson(
+    await client.callTool({
+      name: "scaleway_s3_put_bucket_lifecycle",
+      arguments: { bucket: cfgBucket, rules: [{ id: "expire-probe", enabled: true, prefix: "probe/", expiration_days: 1 }], confirm: true },
+    }),
+    "put_bucket_lifecycle",
+  );
+  const lc = expectJson(await client.callTool({ name: "scaleway_s3_get_bucket_lifecycle", arguments: { bucket: cfgBucket } }), "get_bucket_lifecycle");
+  if (lc.rules.length !== 1 || lc.rules[0].expiration_days !== 1) { console.error("FAILED: lifecycle echo mismatch"); process.exit(1); }
+  console.log("lifecycle get: rule echoed");
+  console.log("lifecycle delete:", text(await client.callTool({ name: "scaleway_s3_delete_bucket_lifecycle", arguments: { bucket: cfgBucket, confirm: true } })).slice(0, 80));
+
+  // --- encryption (declarative) ---
+  console.log("encryption put:", text(await client.callTool({ name: "scaleway_s3_put_bucket_encryption", arguments: { bucket: cfgBucket, algorithm: "AES256" } })).slice(0, 80));
+  const enc = expectJson(await client.callTool({ name: "scaleway_s3_get_bucket_encryption", arguments: { bucket: cfgBucket } }), "get_bucket_encryption");
+  if (!enc.rules?.some((r) => r.algorithm === "AES256")) { console.error("FAILED: encryption echo mismatch"); process.exit(1); }
+  console.log("encryption get: AES256 echoed");
+  console.log("encryption delete:", text(await client.callTool({ name: "scaleway_s3_delete_bucket_encryption", arguments: { bucket: cfgBucket } })).slice(0, 80));
+
+  // --- object lock (one-way; this throwaway bucket is deleted right after) ---
+  // Suspend versioning first so the instructive-error path below is actually reachable.
+  console.log("versioning suspend for lock-negative test:", text(await client.callTool({ name: "scaleway_s3_set_bucket_versioning", arguments: { bucket: cfgBucket, status: "Suspended", confirm: true } })).slice(0, 80));
+  await expectError("scaleway_s3_enable_object_lock", { bucket: cfgBucket, confirm: true }, "lock without versioning rejected instructively");
+  const lock = expectJson(
+    await client.callTool({ name: "scaleway_s3_enable_object_lock", arguments: { bucket: cfgBucket, enable_versioning_if_needed: true, confirm: true } }),
+    "enable_object_lock",
+  );
+  console.log("object lock enabled:", lock.object_lock_enabled, "- versioning auto-enabled:", lock.versioning_now);
+  const lockBack = expectJson(await client.callTool({ name: "scaleway_s3_get_object_lock", arguments: { bucket: cfgBucket } }), "get_object_lock");
+  if (lockBack.object_lock_enabled !== "Enabled") { console.error("FAILED: object lock not echoed as Enabled"); process.exit(1); }
+  await expectError("scaleway_s3_set_bucket_versioning", { bucket: cfgBucket, status: "Suspended", confirm: true }, "versioning suspend blocked while locked");
+  console.log("object lock: enabled, echoed, versioning frozen - verified");
+} finally {
+  // Zero-residue teardown: empty bucket deletes fine even with lock+versioning enabled (probe-verified)
+  console.log("config bucket teardown:", text(await client.callTool({ name: "scaleway_s3_delete_bucket", arguments: { bucket: cfgBucket, confirm: true } })).slice(0, 80));
+  const listCfg = expectJson(await client.callTool({ name: "scaleway_s3_list_buckets", arguments: {} }), "list_buckets after teardown");
+  if (listCfg.buckets.some((b) => b.name === cfgBucket)) { console.error(`FAILED: ${cfgBucket} still present after teardown`); process.exit(1); }
+  console.log("verify gone: config bucket no longer in list_buckets");
+}
+
 await client.close();
 console.log("\nDONE - full read/write/delete lifecycle verified (applications, API keys, buckets, objects)");

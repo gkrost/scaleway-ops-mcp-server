@@ -81,7 +81,18 @@ Via Claude Code / any MCP client, as a stdio server:
 - `scaleway_iam_list_permission_sets` - call this before creating/attaching a policy; see `docs/gotchas.md`.
 
 **Object Storage Buckets** (S3-compatible endpoint, separate auth path from the IAM API)
-- `scaleway_s3_create_bucket`, `scaleway_s3_list_buckets`, `scaleway_s3_delete_bucket` - lifecycle only, deliberately minimal (no visibility/encryption/versioning/lifecycle-rules/website config - use the console or `scw` CLI for those). Exists because Bucket Policies need a bucket to attach to.
+- `scaleway_s3_create_bucket`, `scaleway_s3_list_buckets`, `scaleway_s3_delete_bucket` - bucket lifecycle.
+
+**Object Storage bucket configuration** (issue #7; behavior facts live-verified 2026-08-18, see `docs/gotchas.md`)
+- Tags: `scaleway_s3_get/put/delete_bucket_tagging` (put = full-replace).
+- CORS: `scaleway_s3_get/put/delete_bucket_cors` (put = full-replace).
+- Versioning: `scaleway_s3_get_bucket_versioning`, `scaleway_s3_set_bucket_versioning` (suspend needs confirm).
+- Website: `scaleway_s3_get/put/delete_bucket_website` (put publishes an endpoint, needs confirm).
+- Visibility: `scaleway_s3_get/set_bucket_visibility` - coarse public/private via canned ACL (public needs confirm; Bucket Policies are the fine-grained mechanism).
+- Lifecycle rules: `scaleway_s3_get/put/delete_bucket_lifecycle` (put/delete confirm-guarded - expiration rules permanently delete objects).
+- Encryption config: `scaleway_s3_get/put/delete_bucket_encryption` - real, toggleable setting (console-confirmed), not inert metadata; see `docs/gotchas.md`.
+- Object Lock: `scaleway_s3_get_object_lock`, `scaleway_s3_enable_object_lock` (one-way: never disableable, versioning prerequisite handled, versioning frozen afterwards; create-time lock flag is silently ignored by Scaleway).
+- No tools for bucket logging or bucket metrics: Scaleway's S3 endpoint returns `NotImplemented` for both.
 
 **Object Storage Bucket Policies**
 - `scaleway_s3_get_bucket_policy`, `scaleway_s3_put_bucket_policy`, `scaleway_s3_delete_bucket_policy`
@@ -110,13 +121,12 @@ Via Claude Code / any MCP client, as a stdio server:
 
 ## Scope
 
-Deliberately narrow: IAM identity/policy management, Bucket Policies (plus minimal bucket
-create/list/delete, since a policy needs a bucket to attach to), Object Storage object CRUD
-(put/get/list/head/copy/delete/tags/presigned URLs, single-part only), and Audit Trail (event
-queries, alert rules, export jobs), because that's what actually caused friction so far. Not a
-general Scaleway API wrapper - no compute, databases, containers, no bucket
-visibility/encryption/versioning/lifecycle-rules/website config, no multipart upload, etc. Extend it
-the same way if/when those become a recurring need too.
+Deliberately narrow: IAM identity/policy management, Bucket Policies, bucket lifecycle and
+configuration, Object Storage object CRUD (put/get/list/head/copy/delete/tags/presigned URLs,
+single-part only), and Audit Trail (event queries, alert rules, export jobs), because that's what
+actually caused friction so far. Not a general Scaleway API wrapper - no compute, databases,
+containers, no multipart upload, no bucket logging/metrics (Scaleway's S3 API doesn't implement
+them). Extend it the same way if/when those become a recurring need too.
 
 ## Dev
 

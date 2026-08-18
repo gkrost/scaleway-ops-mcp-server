@@ -30,12 +30,11 @@ const deleteSchema = {
 };
 
 /**
- * Bucket lifecycle only (create/list/delete) - deliberately minimal, matching this server's scope
- * of access-control management rather than general Object Storage administration. Visibility,
- * encryption, versioning, lifecycle rules, static website hosting, tags, and object-level operations
- * are all out of scope; use the console or scw CLI for those. This exists because Bucket Policies
- * (scaleway_s3_put_bucket_policy) require a bucket to already exist - without these three tools,
- * testing or provisioning a bucket policy meant leaving this server entirely.
+ * Bucket lifecycle only (create/list/delete). Configuration (visibility, versioning, object lock,
+ * website, lifecycle rules, tags, CORS, encryption config) lives in bucketConfig.ts; Bucket
+ * Policies in bucketPolicies.ts; object-data operations are issue #8. Note: S3 bucket logging and
+ * bucket metrics have no tools - Scaleway's S3 endpoint returns NotImplemented for both
+ * (live-verified 2026-08-18).
  */
 export function registerBuckets(server: McpServer, config: Config) {
   server.registerTool(
@@ -43,9 +42,10 @@ export function registerBuckets(server: McpServer, config: Config) {
     {
       title: "Create Scaleway Object Storage bucket",
       description:
-        "Create a new, empty Object Storage bucket, private by default. Minimal by design - this server manages " +
-        "access control (Bucket Policies), not bucket configuration; for visibility, encryption, versioning, " +
-        "lifecycle rules, or static website hosting, use the console or scw CLI after creating the bucket here.",
+        "Create a new, empty Object Storage bucket, private by default. Configure it afterwards with the " +
+          "scaleway_s3_*_bucket_* config tools (visibility, versioning, tags, CORS, website, lifecycle, encryption). " +
+          "Object Lock cannot be enabled at creation on Scaleway (the S3 create-time flag is silently ignored) - " +
+          "enable versioning then scaleway_s3_enable_object_lock afterwards.",
       inputSchema: createSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
