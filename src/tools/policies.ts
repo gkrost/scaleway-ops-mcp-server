@@ -85,6 +85,10 @@ const updateSchema = {
     ),
 };
 
+const cloneSchema = {
+  policy_id: z.string().uuid(),
+};
+
 const listSchema = {
   application_id: z.string().uuid().optional().describe("Filter to policies attached to one Application."),
 };
@@ -141,6 +145,28 @@ export function registerPolicies(server: McpServer, config: Config) {
           group_id,
           rules,
         });
+        return toolJsonResult(policy, config.MAX_OUTPUT_CHARS);
+      }),
+  );
+
+  server.registerTool(
+    "scaleway_iam_clone_policy",
+    {
+      title: "Clone Scaleway IAM Policy",
+      description:
+        "Clone an existing IAM Policy in one atomic call (the API's CLONE operation, the console's " +
+        "'Duplicate' action). The new policy is an exact copy: same rules, same principal " +
+        "(application_id/user_id/group_id), same description and tags. Scaleway's clone API takes NO override " +
+        "fields - the clone's name is identical to the source, so rename it afterward with " +
+        "scaleway_iam_update_policy if a distinct name is needed (nothing references a Policy by name, so " +
+        "renaming is always safe). Prefer this over the manual get+create chain: it copies rules in one step " +
+        "without a window where the copy is only partially built.",
+      inputSchema: cloneSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    async ({ policy_id }) =>
+      withIamErrorHandling(async () => {
+        const policy = await iamRequest<Policy>(config, "POST", `/policies/${policy_id}/clone`, {});
         return toolJsonResult(policy, config.MAX_OUTPUT_CHARS);
       }),
   );
