@@ -74,14 +74,65 @@ console.log("created:", createdApp.id, createdApp.name);
 const fetched = await client.callTool({ name: "scaleway_iam_get_application", arguments: { application_id: createdApp.id } });
 console.log("fetched back:", expectJson(fetched, "get_application").name);
 
+console.log("\n=== WRITE PATH: create -> update (no rotation) -> delete an API key ===");
+const createdKey = expectJson(
+  await client.callTool({
+    name: "scaleway_iam_create_api_key",
+    arguments: { application_id: createdApp.id, description: "smoke-test key - safe to delete, deleted by the same run." },
+  }),
+  "create_api_key",
+);
+console.log("created key:", createdKey.access_key);
+
+const updatedKey = expectJson(
+  await client.callTool({
+    name: "scaleway_iam_update_api_key",
+    arguments: { access_key: createdKey.access_key, description: "smoke-test key - description updated in place, no rotation" },
+  }),
+  "update_api_key",
+);
+if (updatedKey.access_key !== createdKey.access_key) {
+  console.error(`FAILED: update_api_key changed access_key (${createdKey.access_key} -> ${updatedKey.access_key}) - should never rotate`);
+  process.exit(1);
+}
+console.log("updated key description:", updatedKey.description);
+
+const deletedKey = await client.callTool({ name: "scaleway_iam_delete_api_key", arguments: { access_key: createdKey.access_key, confirm: true } });
+console.log("deleted key:", text(deletedKey));
+
 const deleted = await client.callTool({
   name: "scaleway_iam_delete_application",
   arguments: { application_id: createdApp.id, confirm: true },
 });
-console.log("deleted:", text(deleted));
+console.log("deleted app:", text(deleted));
 
 const verifyGone = await client.callTool({ name: "scaleway_iam_get_application", arguments: { application_id: createdApp.id } });
 console.log("verify gone - isError:", verifyGone.isError, "-", text(verifyGone).slice(0, 200));
 
+console.log("\n=== WRITE PATH: create -> list -> delete a throwaway bucket ===");
+const throwawayBucket = `mcp-smoke-test-bucket-${Date.now()}`;
+const createdBucket = expectJson(
+  await client.callTool({ name: "scaleway_s3_create_bucket", arguments: { bucket: throwawayBucket } }),
+  "create_bucket",
+);
+console.log("created bucket:", createdBucket.bucket, "in", createdBucket.region);
+
+const bucketList = expectJson(await client.callTool({ name: "scaleway_s3_list_buckets", arguments: {} }), "list_buckets");
+if (!bucketList.buckets.some((b) => b.name === throwawayBucket)) {
+  console.error(`FAILED: list_buckets did not include ${throwawayBucket}`);
+  process.exit(1);
+}
+console.log(`list_buckets: found ${throwawayBucket} among ${bucketList.count} buckets`);
+
+const deletedBucket = await client.callTool({ name: "scaleway_s3_delete_bucket", arguments: { bucket: throwawayBucket, confirm: true } });
+console.log("deleted bucket:", text(deletedBucket));
+
+const bucketListAfter = expectJson(await client.callTool({ name: "scaleway_s3_list_buckets", arguments: {} }), "list_buckets (after delete)");
+if (bucketListAfter.buckets.some((b) => b.name === throwawayBucket)) {
+  console.error(`FAILED: ${throwawayBucket} still present after delete_bucket`);
+  process.exit(1);
+}
+console.log("verify gone: bucket no longer in list_buckets");
+
 await client.close();
-console.log("\nDONE - full read/write/delete lifecycle verified");
+console.log("\nDONE - full read/write/delete lifecycle verified (applications, API keys, buckets)");

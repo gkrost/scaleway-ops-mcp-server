@@ -1,13 +1,8 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import {
-  DeleteBucketPolicyCommand,
-  GetBucketPolicyCommand,
-  PutBucketPolicyCommand,
-  S3ServiceException,
-} from "@aws-sdk/client-s3";
+import { DeleteBucketPolicyCommand, GetBucketPolicyCommand, PutBucketPolicyCommand } from "@aws-sdk/client-s3";
 import type { Config } from "../config.js";
-import { getS3Client } from "../s3Client.js";
+import { getS3Client, handleS3 } from "../s3Client.js";
 import { toolJsonResult, toolError } from "../output.js";
 
 const bucketField = z.string().min(3).describe("Bucket name, e.g. 'payments-backups'.");
@@ -54,17 +49,6 @@ function isValidJson(text: string): boolean {
     return true;
   } catch {
     return false;
-  }
-}
-
-async function handleS3<T>(fn: () => Promise<T>): Promise<T | ReturnType<typeof toolError>> {
-  try {
-    return await fn();
-  } catch (err) {
-    if (err instanceof S3ServiceException) {
-      return toolError(`Scaleway Object Storage error (${err.name}): ${err.message}`) as unknown as T;
-    }
-    throw err;
   }
 }
 

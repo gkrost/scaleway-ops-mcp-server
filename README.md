@@ -64,7 +64,8 @@ Via Claude Code / any MCP client, as a stdio server:
 - `scaleway_iam_create_application`, `scaleway_iam_list_applications`, `scaleway_iam_get_application`, `scaleway_iam_update_application`, `scaleway_iam_delete_application`
 
 **IAM API keys**
-- `scaleway_iam_create_api_key`, `scaleway_iam_list_api_keys`, `scaleway_iam_delete_api_key`
+- `scaleway_iam_create_api_key`, `scaleway_iam_list_api_keys`, `scaleway_iam_update_api_key`, `scaleway_iam_delete_api_key`
+- `update_api_key` covers `description`/`expires_at`/`default_project_id` only - the access_key/secret_key pair never changes, so it never rotates the credential.
 
 **IAM Policies**
 - `scaleway_iam_create_policy`, `scaleway_iam_list_policies`, `scaleway_iam_get_policy`, `scaleway_iam_update_policy`, `scaleway_iam_delete_policy`
@@ -76,7 +77,10 @@ Via Claude Code / any MCP client, as a stdio server:
 **IAM Permission sets**
 - `scaleway_iam_list_permission_sets` - call this before creating/attaching a policy; see `docs/gotchas.md`.
 
-**Object Storage Bucket Policies** (S3-compatible endpoint, separate auth path from the IAM API)
+**Object Storage Buckets** (S3-compatible endpoint, separate auth path from the IAM API)
+- `scaleway_s3_create_bucket`, `scaleway_s3_list_buckets`, `scaleway_s3_delete_bucket` - lifecycle only, deliberately minimal (no visibility/encryption/versioning/lifecycle-rules/website config - use the console or `scw` CLI for those). Exists because Bucket Policies need a bucket to attach to.
+
+**Object Storage Bucket Policies**
 - `scaleway_s3_get_bucket_policy`, `scaleway_s3_put_bucket_policy`, `scaleway_s3_delete_bucket_policy`
 
 **Audit Trail**
@@ -84,10 +88,11 @@ Via Claude Code / any MCP client, as a stdio server:
 
 ## Scope
 
-Deliberately narrow: IAM identity/policy management, Bucket Policies, and read-only Audit Trail,
-because that's what actually caused friction so far. Not a general Scaleway API wrapper - no
-compute, databases, containers, etc. Extend it the same way if/when those become a recurring need
-too.
+Deliberately narrow: IAM identity/policy management, Bucket Policies (plus minimal bucket
+create/list/delete, since a policy needs a bucket to attach to), and read-only Audit Trail, because
+that's what actually caused friction so far. Not a general Scaleway API wrapper - no compute,
+databases, containers, no bucket visibility/encryption/versioning/lifecycle-rules/website config,
+etc. Extend it the same way if/when those become a recurring need too.
 
 ## Dev
 

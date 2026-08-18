@@ -6,6 +6,7 @@ import { registerApplications } from "./tools/applications.js";
 import { registerApiKeys } from "./tools/apiKeys.js";
 import { registerPolicies } from "./tools/policies.js";
 import { registerPermissionSets } from "./tools/permissionSets.js";
+import { registerBuckets } from "./tools/buckets.js";
 import { registerBucketPolicies } from "./tools/bucketPolicies.js";
 import { registerAuditTrail } from "./tools/auditTrail.js";
 
@@ -20,6 +21,7 @@ registerApplications(server, config);
 registerApiKeys(server, config);
 registerPolicies(server, config);
 registerPermissionSets(server, config);
+registerBuckets(server, config);
 registerBucketPolicies(server, config);
 registerAuditTrail(server, config);
 

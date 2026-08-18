@@ -36,6 +36,17 @@ const createSchema = {
     .describe("Preferred Project for Object Storage operations with this key. Required if this key will call the S3-compatible API (bucket policies, objects)."),
 };
 
+const updateSchema = {
+  access_key: z.string().min(1).describe("The access_key (not secret_key) of the key to update, e.g. 'SCWXXXXXXXXXXXXXXXXX'."),
+  description: z.string().max(200).optional().describe("New description. Omit to leave unchanged."),
+  expires_at: z
+    .string()
+    .datetime()
+    .optional()
+    .describe("New RFC3339 expiry, e.g. '2027-08-12T00:00:00Z'. Omit to leave unchanged - there is no way to clear an existing expiry back to 'never', only to set a new one."),
+  default_project_id: z.string().uuid().optional().describe("New default Project for Object Storage operations with this key. Omit to leave unchanged."),
+};
+
 const listSchema = {
   application_id: z.string().uuid().optional().describe("Filter to keys belonging to one Application. Omit to list all keys in the Organization."),
 };
@@ -64,6 +75,30 @@ export function registerApiKeys(server: McpServer, config: Config) {
       withIamErrorHandling(async () => {
         const key = await iamRequest<ApiKey>(config, "POST", "/api-keys", {
           application_id,
+          description,
+          expires_at,
+          default_project_id,
+        });
+        return toolJsonResult(key, config.MAX_OUTPUT_CHARS);
+      }),
+  );
+
+  server.registerTool(
+    "scaleway_iam_update_api_key",
+    {
+      title: "Update Scaleway API Key",
+      description:
+        "Change an existing API key's description, expiry, or default_project_id WITHOUT rotating its secret - " +
+        "the access_key/secret_key pair itself never changes. Use this instead of delete+recreate for a metadata-" +
+        "only change (e.g. extending an expiry before it lapses, or fixing a stale description); delete+recreate " +
+        "would mint a new secret and break anything already deployed with the old one. Only the fields you pass " +
+        "are changed; omitted fields are left as-is.",
+      inputSchema: updateSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ access_key, description, expires_at, default_project_id }) =>
+      withIamErrorHandling(async () => {
+        const key = await iamRequest<ApiKey>(config, "PATCH", `/api-keys/${access_key}`, {
           description,
           expires_at,
           default_project_id,

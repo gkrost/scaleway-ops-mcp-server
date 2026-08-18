@@ -1,5 +1,6 @@
-import { S3Client } from "@aws-sdk/client-s3";
+import { S3Client, S3ServiceException } from "@aws-sdk/client-s3";
 import type { Config } from "./config.js";
+import { toolError } from "./output.js";
 
 /**
  * One S3Client per region: bucket-policy calls go through the region-specific
@@ -25,4 +26,16 @@ export function getS3Client(config: Config, region?: string): S3Client {
     clientsByRegion.set(r, client);
   }
   return client;
+}
+
+/** Run an S3 call, converting S3ServiceException into a well-formed tool error result. Re-throws anything else. */
+export async function handleS3<T>(fn: () => Promise<T>): Promise<T | ReturnType<typeof toolError>> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof S3ServiceException) {
+      return toolError(`Scaleway Object Storage error (${err.name}): ${err.message}`) as unknown as T;
+    }
+    throw err;
+  }
 }
