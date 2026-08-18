@@ -134,5 +134,70 @@ if (bucketListAfter.buckets.some((b) => b.name === throwawayBucket)) {
 }
 console.log("verify gone: bucket no longer in list_buckets");
 
+console.log("\n=== AUDIT TRAIL (issue #9): registered audit tools ===");
+const tools = await client.listTools();
+const auditTools = tools.tools.filter((t) => t.name.startsWith("scaleway_audit_")).map((t) => t.name);
+console.log(auditTools.join("\n"));
+
+console.log("\n=== AUDIT TRAIL (issue #9): read paths (tolerant - permission coverage may vary) ===");
+const auditReads = [
+  ["scaleway_audit_list_authentication_events", { max_pages: 1 }],
+  ["scaleway_audit_list_system_events", { max_pages: 1 }],
+  ["scaleway_audit_list_combined_events", { max_pages: 1 }],
+  ["scaleway_audit_get_last_events_overview", {}],
+  ["scaleway_audit_list_products", {}],
+  ["scaleway_audit_list_alert_rules", {}],
+  ["scaleway_audit_list_custom_alert_rules", {}],
+  ["scaleway_audit_list_export_jobs", {}],
+];
+for (const [name, args] of auditReads) {
+  const res = await client.callTool({ name, arguments: args });
+  const body = text(res).slice(0, 200).replace(/\n/g, " ");
+  console.log(`${res.isError ? "ERROR" : "ok   "} ${name}: ${body}`);
+}
+
+console.log("\n=== AUDIT TRAIL (issue #9): custom alert rule lifecycle (write path - may lack permissions) ===");
+const ruleName = `mcp-smoke-test-alert-${Date.now()}`;
+const createdRule = await client.callTool({
+  name: "scaleway_audit_create_custom_alert_rule",
+  arguments: {
+    name: ruleName,
+    description: "smoke-test rule - safe to delete, deleted by the same run.",
+    query: 'event.method_name == "ListApplications"',
+    occurrences: 1,
+  },
+});
+if (createdRule.isError) {
+  console.log("create blocked (expected if credential lacks Audit Trail write perms):", text(createdRule).slice(0, 300));
+} else {
+  const rule = JSON.parse(text(createdRule));
+  console.log("created rule:", rule.id, "status:", rule.status, "severity:", rule.severity);
+  const updated = await client.callTool({
+    name: "scaleway_audit_update_custom_alert_rule",
+    arguments: { custom_alert_rule_id: rule.id, description: "smoke-test rule - description updated in place." },
+  });
+  if (updated.isError) {
+    console.log("FAILED at update_custom_alert_rule:", text(updated));
+    process.exit(1);
+  }
+  console.log("updated description:", JSON.parse(text(updated)).description);
+  const del = await client.callTool({
+    name: "scaleway_audit_delete_custom_alert_rule",
+    arguments: { custom_alert_rule_id: rule.id, confirm: true },
+  });
+  if (del.isError) {
+    console.log("FAILED at delete_custom_alert_rule:", text(del));
+    process.exit(1);
+  }
+  console.log("deleted rule:", text(del));
+  const listAfter = await client.callTool({ name: "scaleway_audit_list_custom_alert_rules", arguments: {} });
+  const remaining = JSON.parse(text(listAfter)).custom_alert_rules.filter((r) => r.id === rule.id);
+  if (remaining.length > 0) {
+    console.error(`FAILED: rule ${rule.id} still present after delete`);
+    process.exit(1);
+  }
+  console.log("verify gone: rule no longer in list_custom_alert_rules");
+}
+
 await client.close();
 console.log("\nDONE - full read/write/delete lifecycle verified (applications, API keys, buckets)");

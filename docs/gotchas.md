@@ -190,6 +190,30 @@ a total. `scaleway_audit_list_events` treats its `max_pages` as a safety cap, no
 guarantee, and says so in the response (`truncated: true` plus the last `next_page_token`) rather
 than silently stopping.
 
+## Creating an Audit Trail export job immediately backfills past days, it doesn't just start a future cadence
+
+Live-verified 2026-08-18, test-driving `scaleway_audit_create_export_job` (issue #9 / PR #11):
+creating a job against an empty throwaway bucket produced six daily log objects
+(`2026/07/12/logs_*.json` through `2026/07/17/logs_*.json`) within seconds - a backfill of the
+*past* several days, not just events going forward. `scaleway_audit_delete_export_job` explicitly
+does not delete already-exported objects (by design, matching every other delete tool in this
+server), so a bucket created purely to test an export job will NOT be empty afterward -
+`scaleway_s3_delete_bucket` fails `BucketNotEmpty` until those objects are removed, which needs a
+raw S3 call since object-level operations are out of this server's scope.
+
+## Preconfigured alert rules start all-disabled, and the two write tools differ in blast radius
+
+`scaleway_audit_list_alert_rules` returned all 11 preconfigured rules as `disabled` on a
+long-running production Organization (not a fresh account) - nothing is enabled by default.
+Live-verified: `scaleway_audit_set_alert_rules_enabled` (additive) and
+`scaleway_audit_replace_enabled_alert_rules` (full-replace) both reject an unknown rule ID with a
+whole-request `404` and no partial application - confirmed by enabling a real rule alongside a
+fabricated UUID and observing the real one stayed untouched. Only the additive tool was exercised
+live end-to-end (enable -> verify -> disable -> verify reverted); `replace_enabled_alert_rules`
+itself was blocked by Claude Code's own auto-mode safety classifier during this session's test pass
+and remains functionally unverified beyond its shared request-validation behavior - worth a
+deliberate live check before relying on its "everything not listed gets disabled" semantics.
+
 ## Console navigation friction is unrelated to any of the above
 
 Provisioning this same credential manually through the web console (before this server existed)

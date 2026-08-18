@@ -53,13 +53,13 @@ scope boundary is a deliberate, visible line rather than an implicit one.
 | Capability | Console | API | This MCP |
 |---|---|---|---|
 | List events (time range, resource filter) | ✅ | ✅ | ✅ |
-| Authentication events (separate endpoint) | ✅ (implied) | ✅ | ❌ not covered |
-| System events | ❓ | ✅ | ❌ not covered |
-| Combined events / last-events-overview | ❓ | ✅ | ❌ not covered |
-| Export jobs (ship audit logs to storage) | ✅ | ✅ | ❌ not covered |
-| Alert rules + custom alert rules (list/enable/disable/create/update/delete) | ✅ | ✅ | ❌ not covered - this is the one gap in this section with real standalone value (alerting, not just querying), worth a look if Audit Trail becomes a bigger focus |
+| Authentication events (separate endpoint) | ✅ (implied) | ✅ | ✅ **fixed 2026-08-18** (`scaleway_audit_list_authentication_events`) |
+| System events | ❓ | ✅ | ✅ **fixed 2026-08-18** (`scaleway_audit_list_system_events`) |
+| Combined events / last-events-overview | ❓ | ✅ | ✅ **fixed 2026-08-18** (`scaleway_audit_list_combined_events`, `scaleway_audit_get_last_events_overview`, plus `scaleway_audit_list_products` for the filter-value catalog) |
+| Export jobs (ship audit logs to storage) | ✅ | ✅ | ✅ **fixed 2026-08-18** (`scaleway_audit_list/create/delete_export_job`; endpoints verified live, lifecycle not end-to-end exercised to avoid creating real export state) |
+| Alert rules + custom alert rules (list/enable/disable/create/update/delete) | ✅ | ✅ / ⚠️ | ⚠️ **partially fixed 2026-08-18**: preconfigured alert rules fully covered (`list`/`set_enabled`/`replace_enabled`, endpoints live-verified); custom alert rules have all 6 tools implemented, but **Scaleway's deployed API returns HTTP 501 "unknown method" for every custom-alert-rules method** (verified live against fr-par on 2026-08-18 for GET/POST/PUT/PATCH) - documented-but-unimplemented on Scaleway's side; tools will work when the backend ships |
 
-All Audit Trail gaps in this table are tracked together in [#9](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/9).
+All Audit Trail gaps in this table were tracked in [#9](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/9) - addressed 2026-08-18, except the custom-alert-rules half, which is blocked on Scaleway implementing its own documented API.
 
 ## Bottom line
 
@@ -78,8 +78,10 @@ this session's live re-test - **both fixed and live-verified 2026-08-18**:
    from list.
 
 Everything else in the tables above is a legitimate, deliberate scope boundary (Users/Groups/SSH
-Keys/SAML/SCIM, bucket data-plane and settings, Audit Trail's alerting/export machinery) - not a gap
-so much as a confirmation the README's stated scope is accurate. Each is now tracked as its own
+Keys/SAML/SCIM, bucket data-plane and settings) - not a gap so much as a confirmation the README's
+stated scope is accurate. Audit Trail's alerting/export machinery, originally listed here as out of
+scope, was subsequently implemented (2026-08-18) - see the Audit Trail table above for what works
+and what's blocked on Scaleway's own API. Each remaining gap is tracked as its own
 GitHub issue (labeled `scaleway`) rather than left implicit:
 [#3](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/3) policy clone,
 [#4](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/4) Users,
