@@ -360,3 +360,7 @@ on first real use - listed here in one place:
 
 Verify against the live API (with explicit user sign-off, given the blast radius) before any of
 these are relied on in production.
+
+## Enabling versioning then deleting objects leaves `delete_bucket` failing `BucketNotEmpty` (found 2026-08-18, full-feature-set test drive)
+
+Repro: `create_bucket` -> `set_bucket_versioning(Enabled)` -> `put_object` + `delete_object` -> `delete_bucket(confirm: true)` fails `BucketNotEmpty`, even though `scaleway_s3_list_objects` shows the bucket as empty. On a versioned bucket, `DeleteObject` creates a delete-marker instead of removing the underlying version - `list_objects` hides anything behind a delete-marker, but the non-current version is still there, so S3 correctly refuses the bucket delete. This server's Object Storage tools have no `ListObjectVersions`/version-scoped delete, so once versioning has been turned on there is no path back to an empty, deletable bucket through this MCP server alone - same class of gap as the Audit Trail export-job case above, requiring a raw S3 SDK/CLI call outside the server to purge version history before `delete_bucket` will succeed.
