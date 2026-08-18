@@ -248,3 +248,14 @@ though: the console's drag-and-drop/file-picker upload always interposes a "Stor
 there's no default-and-skip. `scaleway_s3_put_object` has no such step (S3's `PutObject` doesn't
 require a storage class; Scaleway defaults it), so an MCP upload and a console upload of the same
 file take genuinely different paths to the same result, not just a UI-vs-API skin over one flow.
+
+## IAM Users: invite-vs-create unresolved, owner is type-flag not boolean, password is admin-set (issue #4)
+
+Live-probed 2026-08-18 (read-only + bogus-id error shapes; no disposable mailbox, so the create happy-path stayed unprobed):
+
+- Scaleway docs say users "can only be invited to join" an Organization, yet `POST /iam/v1alpha1/users` exists and requires a `type` field (missing-type probe: 400 `type: value is required`). Email-format validation fires before type validation, so the valid `type` enum could not be enumerated without sending a real invitation email. `scaleway_iam_create_user` defaults to `type: "guest"` (inferred from the guest-scoped delete endpoint) and labels the semantics unverified in its description.
+- The org owner is identified by `type: "owner"` on the user object - there is no `organization_owner` boolean. `delete_user` refuses owner deletion tool-side, and the API's delete endpoint is guest-scoped anyway ("Delete a guest user").
+- `update-password` takes an explicit caller-supplied `password` (1-72 bytes - probed: empty body gives the length constraint), i.e. admin-set reset, not a generated-secret response like API-key creation. The tool therefore never returns a password.
+- All user mutations return clean `404 resource: user` on bogus ids - surfaced verbatim.
+- The server credential needed `IAMUserManager` added to its existing org-scoped IAM rule (granted via this server's own `set_policy_rules`, 2026-08-18) - `GET /users` 403s with only IAMApplicationManager.
+- `mfa` on the user object is a plain boolean; MFA OTP enrollment (create/validate) is deliberately not a tool - validation needs the person's authenticator code, and a created-but-unvalidated factor leaves MFA half-configured.
