@@ -476,6 +476,20 @@ for (const [name, args, label] of [
   console.log(`api err ok (${label}): ${text(res).slice(0, 100)}`);
 }
 
+// Regression guard: update_user_password must actually send the password in the request body.
+// A bogus id with a valid password must fail with the API's "resource: user" 404 - NOT a "password
+// required"-style validation error, which is what a body-omission bug (previously shipped) produces
+// instead, since the missing field gets caught before the id is ever looked up.
+const bogusPassword = await client.callTool({
+  name: "scaleway_iam_update_user_password",
+  arguments: { user_id: bogusId, password: "Xy9!mQ2#kL7%pR4z", confirm: true },
+});
+if (!bogusPassword.isError || !text(bogusPassword).includes("resource is not found")) {
+  console.error(`FAILED: update_user_password did not surface the expected bogus-id 404 (password body likely not sent): ${text(bogusPassword)}`);
+  process.exit(1);
+}
+console.log("api err ok (password bogus id): password reached the API and the id lookup 404'd, as expected");
+
 // Create negative-only: invalid email must be rejected by the API (validation fires before any email is sent)
 const badCreate = await client.callTool({ name: "scaleway_iam_create_user", arguments: { email: "not-an-email", type: "guest", confirm: true } });
 if (!badCreate.isError || !text(badCreate).includes("email")) { console.error("FAILED: invalid-email create not rejected as expected:", text(badCreate)); process.exit(1); }

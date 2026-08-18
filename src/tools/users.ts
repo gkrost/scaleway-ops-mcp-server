@@ -201,9 +201,9 @@ export function registerUsers(server: McpServer, config: Config) {
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ user_id }) =>
+    async ({ user_id, password }) =>
       withIamErrorHandling(async () => {
-        const u = await iamRequest<User>(config, "POST", `/users/${user_id}/update-password`);
+        const u = await iamRequest<User>(config, "POST", `/users/${user_id}/update-password`, { password });
         return toolJsonResult({ password_set: true, user: userView(u) }, config.MAX_OUTPUT_CHARS);
       }),
   );
