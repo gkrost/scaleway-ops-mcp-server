@@ -85,14 +85,27 @@ Via Claude Code / any MCP client, as a stdio server:
 **Object Storage Bucket Policies**
 - `scaleway_s3_get_bucket_policy`, `scaleway_s3_put_bucket_policy`, `scaleway_s3_delete_bucket_policy`
 
-**Audit Trail**
-- `scaleway_audit_list_events` - who did what, when, from where. Needs `AuditTrailReadOnly` on this server's own credential (organization scope, same rule as `IAMApplicationManager`/`IAMPolicyManager` if already present) - grant via `scaleway_iam_set_policy_rules`.
+**Audit Trail — event queries** (read-only; all need `AuditTrailReadOnly` on this server's credential - grant via `scaleway_iam_set_policy_rules`)
+- `scaleway_audit_list_events` - who did what, when, from where (API/resource activity).
+- `scaleway_audit_list_authentication_events` - authentication activity (login/token/MFA outcomes) - separate endpoint.
+- `scaleway_audit_list_system_events` - actions performed by Scaleway's own systems on your resources.
+- `scaleway_audit_list_combined_events` - all three streams in one chronological feed, each event tagged api/auth/system.
+- `scaleway_audit_get_last_events_overview` - the recent-events snapshot the console's Audit Trail landing page shows.
+- `scaleway_audit_list_products` - products/services/methods integrated with Audit Trail (the valid filter-value catalog).
+
+**Audit Trail — alert rules**
+- `scaleway_audit_list_alert_rules`, `scaleway_audit_set_alert_rules_enabled` (additive), `scaleway_audit_replace_enabled_alert_rules` (full-replace, confirm-guarded) - Scaleway's preconfigured rules; they can only be enabled/disabled, never created or deleted. Unknown rule IDs reject the whole request atomically (live-verified 2026-08-18).
+- `scaleway_audit_list_custom_alert_rules`, `scaleway_audit_create_custom_alert_rule`, `scaleway_audit_update_custom_alert_rule` (name/description only), `scaleway_audit_delete_custom_alert_rule`, `scaleway_audit_set_custom_alert_rules_enabled`, `scaleway_audit_replace_enabled_custom_alert_rules` - **caveat: Scaleway documents these endpoints but the deployed API returns HTTP 501 for every custom-alert-rules method (live-verified 2026-08-18)**. The tools are in place and surface that error verbatim; they'll work when Scaleway ships the backend.
+
+**Audit Trail — export jobs** (ship audit events to an Object Storage bucket)
+- `scaleway_audit_list_export_jobs`, `scaleway_audit_create_export_job`, `scaleway_audit_delete_export_job` (confirm-guarded; stops future exports, doesn't delete already-exported objects).
+- Alert/export write tools need more than `AuditTrailReadOnly` on this server's credential; permission errors surface verbatim.
 
 ## Scope
 
 Deliberately narrow: IAM identity/policy management, Bucket Policies (plus minimal bucket
-create/list/delete, since a policy needs a bucket to attach to), and read-only Audit Trail, because
-that's what actually caused friction so far. Not a general Scaleway API wrapper - no compute,
+create/list/delete, since a policy needs a bucket to attach to), and Audit Trail (event queries,
+alert rules, export jobs), because that's what actually caused friction so far. Not a general Scaleway API wrapper - no compute,
 databases, containers, no bucket visibility/encryption/versioning/lifecycle-rules/website config,
 etc. Extend it the same way if/when those become a recurring need too.
 

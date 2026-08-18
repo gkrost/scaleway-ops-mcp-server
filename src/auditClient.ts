@@ -20,10 +20,19 @@ function formatAuditErrorBody(status: number, body: unknown): string {
   return `Scaleway Audit Trail API error (HTTP ${status})`;
 }
 
-export async function auditRequest<T>(config: Config, path: string): Promise<T> {
+export async function auditRequest<T>(
+  config: Config,
+  path: string,
+  options: { method?: string; body?: unknown } = {},
+): Promise<T> {
+  const { method = "GET", body } = options;
+  const headers: Record<string, string> = { "X-Auth-Token": config.SCW_SECRET_KEY };
+  if (body) headers["Content-Type"] = "application/json";
+
   const res = await fetch(`${AUDIT_TRAIL_BASE_URL}${path}`, {
-    method: "GET",
-    headers: { "X-Auth-Token": config.SCW_SECRET_KEY },
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
   });
 
   const text = await res.text();

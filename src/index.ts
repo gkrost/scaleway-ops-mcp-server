@@ -9,6 +9,8 @@ import { registerPermissionSets } from "./tools/permissionSets.js";
 import { registerBuckets } from "./tools/buckets.js";
 import { registerBucketPolicies } from "./tools/bucketPolicies.js";
 import { registerAuditTrail } from "./tools/auditTrail.js";
+import { registerAuditTrailAlerts } from "./tools/auditTrailAlerts.js";
+import { registerAuditTrailExports } from "./tools/auditTrailExports.js";
 
 const config = loadConfig();
 
@@ -24,6 +26,8 @@ registerPermissionSets(server, config);
 registerBuckets(server, config);
 registerBucketPolicies(server, config);
 registerAuditTrail(server, config);
+registerAuditTrailAlerts(server, config);
+registerAuditTrailExports(server, config);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
