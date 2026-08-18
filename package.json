@@ -1,7 +1,7 @@
 {
   "name": "scaleway-ops-mcp-server",
   "version": "0.1.0",
-  "description": "MCP server for Scaleway IAM (Applications, API keys, Policies, Permission sets) and Object Storage Bucket Policy management",
+  "description": "MCP server for Scaleway IAM (Applications, API keys, Policies, Permission sets) and Object Storage (buckets, Bucket Policies, object CRUD)",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -24,6 +24,7 @@
   "license": "MIT",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1108.0",
+    "@aws-sdk/s3-request-presigner": "^3.1112.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "zod": "^3.24.2"
   },

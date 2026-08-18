@@ -45,7 +45,7 @@ scope boundary is a deliberate, visible line rather than an implicit one.
 | Lifecycle rules (expiration/transition) | ✅ | ✅ | ❌ out of scope - tracked in [#7](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/7) |
 | Bucket tags | ✅ | ✅ | ❌ out of scope - tracked in [#7](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/7) |
 | CORS configuration | (console CLI-only per docs) | ✅ | ❌ out of scope - tracked in [#7](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/7) |
-| Object-level ops (upload/download/delete/list objects, metadata, tags) | ✅ (Files tab) | ✅ | ❌ out of scope - this server is policy/access-control only, never touches object data - tracked in [#8](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/8) |
+| Object-level ops (upload/download/delete/list objects, metadata, tags) | ✅ (Files tab) | ✅ | ✅ **fixed 2026-08-18** (`scaleway_s3_put_object`/`get_object`/`list_objects`/`head_object`/`copy_object`/`delete_object`/`delete_objects`/`get_object_tags`/`put_object_tags`/`generate_presigned_url`) - full CRUD, live-verified via MCP only (create bucket → put text+binary → head → list → get byte-identical round-trip → tags → copy → presigned-URL fetch → batch delete → delete → bucket gone), see [#8](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/8) |
 | Bucket metrics / access logs | ✅ | ✅ | ❌ out of scope - tracked in [#7](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/7) |
 
 ## Audit Trail
@@ -77,18 +77,27 @@ this session's live re-test - **both fixed and live-verified 2026-08-18**:
    test the bucket-policy tools against. Confirmed live: create → appears in list → delete → gone
    from list.
 
+Object-level operations, originally listed here as out of scope ("this server never touches object
+data"), were also implemented 2026-08-18 - direction changed in
+[#8](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/8) once the same
+friction that motivated the bucket-lifecycle tools (dropping out of MCP to a raw
+`@aws-sdk/client-s3` script) turned out to apply to object data too. Presigned URLs and object tags
+(originally P1/"implement or defer with rationale") were both implemented rather than deferred - the
+extra surface area was small given `s3Client.ts`'s existing SigV4 path, and both are exercised by
+`scripts/smoke-test.mjs`.
+
 Everything else in the tables above is a legitimate, deliberate scope boundary (Users/Groups/SSH
-Keys/SAML/SCIM, bucket data-plane and settings) - not a gap so much as a confirmation the README's
-stated scope is accurate. Audit Trail's alerting/export machinery, originally listed here as out of
-scope, was subsequently implemented (2026-08-18) - see the Audit Trail table above for what works
-and what's blocked on Scaleway's own API. Each remaining gap is tracked as its own
+Keys/SAML/SCIM, bucket *configuration* - visibility/encryption/versioning/lifecycle-rules/website/
+metrics, as opposed to bucket *data* which #8 now covers) - not a gap so much as a confirmation the
+README's stated scope is accurate. Audit Trail's alerting/export machinery, originally listed here
+as out of scope, was subsequently implemented (2026-08-18) - see the Audit Trail table above for
+what works and what's blocked on Scaleway's own API. Each remaining gap is tracked as its own
 GitHub issue (labeled `scaleway`) rather than left implicit:
 [#3](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/3) policy clone,
 [#4](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/4) Users,
 [#5](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/5) Groups,
 [#6](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/6) SSH Keys/Quotas/JWTs/SAML/SCIM,
 [#7](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/7) bucket configuration,
-[#8](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/8) object-level operations,
 [#9](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/9) Audit Trail's broader surface.
 
 ## Is this server redundant with something official/established? (checked 2026-08-18)
