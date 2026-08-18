@@ -222,3 +222,21 @@ key) that turned out to be a permission classifier gating those specific actions
 environment - unrelated to anything about Scaleway's own API or console. Not relevant here since
 this server talks to the API directly, but noted in case a future console-automation attempt hits
 the same wall.
+
+## Object Lock on Scaleway: create-time flag silently ignored, enable needs versioning, disable is schema-impossible (issue #7)
+
+All live-verified 2026-08-18 against fr-par with throwaway buckets (probe scripts in the PR description):
+
+- `CreateBucket` with `ObjectLockEnabledForBucket: true` is **silently ignored** - returns 200/OK, but `GetObjectLockConfiguration` stays `ObjectLockConfigurationNotFoundError` and versioning stays unset. The console's "Object Lock" create-time checkbox must go through a different (non-S3) path; via the S3 API the only working sequence is enable-versioning -> `PutObjectLockConfiguration`.
+- `PutObjectLockConfiguration` on a bucket without versioning fails `InvalidBucketState: Versioning must be 'Enabled'...` - so `scaleway_s3_enable_object_lock` checks/enables versioning itself (`enable_versioning_if_needed`).
+- Disabling is impossible at the protocol level: `ObjectLockEnabled: "Disabled"` is rejected `MalformedXML` (the schema has no disabled state) - a true one-way door, documented as such in the tool.
+- After lock is enabled, versioning is frozen: `PutBucketVersioning Suspended` fails `InvalidBucketState: An Object Lock configuration is present on this bucket, so the versioning state cannot be changed.`
+- An empty bucket with lock + versioning enabled still deletes normally (`DeleteBucket` OK) - no residue trap there.
+
+## S3 bucket encryption config on Scaleway is declarative metadata, not an encryption switch (issue #7)
+
+`GetBucketEncryption` on a fresh bucket returns HTTP 200 with an **empty** `ServerSideEncryptionConfiguration` (AWS returns a NotFound error instead); `PutBucketEncryption` (AES256) and `DeleteBucketEncryption` both succeed but change nothing about actual at-rest encryption - Scaleway encrypts all Object Storage platform-side regardless. The tools exist for S3-API-compatibility/tooling that expects a config object; their descriptions say exactly this.
+
+## S3 bucket logging and bucket metrics are NotImplemented on Scaleway (issue #7)
+
+`PutBucketLogging`/`GetBucketLogging` -> `NotImplemented: Action not implemented`; `GetBucketMetricsConfiguration` -> same. Access logging and metrics on Scaleway live elsewhere (Cockpit / console), not behind the S3 API - no tools exist for them and none are possible on this API surface.
