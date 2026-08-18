@@ -34,8 +34,20 @@ no credential rotation). Confirmed live via a follow-up `scaleway_iam_list_polic
 | `scaleway-ops-mcp_iam_and_storage` | `scaleway-ops-mcp-iam-and-storage` |
 | `zvg-backups-least-privilege_object_storage` | `dev-zvg-backups-least-privilege-storage` |
 
-Application names were left untouched; only their attached Policy objects were renamed. Note
-the Application-name layer still carries the same dot-vs-dash inconsistency this review fixed
-on Policies (e.g. `dev.zvg-files-least-privilege` vs. `prod-zvg-backups-rw`) - out of scope
-here since the ask was policy names specifically, but worth a follow-up pass if it's worth
-fixing account-wide.
+## Follow-up: Application names (2026-08-18, same day)
+
+The dot-vs-dash inconsistency flagged above at the Application-name layer was fixed the same
+day via `scaleway_iam_update_application` (`name` field only, same "always safe" basis -
+Bucket Policies and API keys reference `application_id`, never the name). Confirmed live via a
+follow-up `scaleway_iam_list_applications`: `nb_api_keys` unchanged on every one.
+
+| Old name | New name |
+|---|---|
+| `dev.zvg-files-least-privilege` | `dev-zvg-files-least-privilege` |
+| `prod.zvg-files-least-privilege` | `prod-zvg-files-least-privilege` |
+| `zvg-backups-least-privilege` | `dev-zvg-backups-least-privilege` (also picked up the missing `dev-` prefix - its own description already scoped it to dev-only) |
+
+`unidrive-scaleway-test`, `claude-code-operator`, `scaleway-ops-mcp`, `local-zvg-files-readonly`,
+`prod-zvg-backups-rw`, and `prod-immo-user-documents-rw` were already dash-only and needed no
+change. Every Application name in the Organization is now dash-separated with a consistent
+`dev-`/`prod-`/`local-` (or no) environment prefix.
