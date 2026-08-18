@@ -1,5 +1,7 @@
 # scaleway-ops-mcp-server
 
+[![CI](https://github.com/logic-arts-official/scaleway-ops-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/logic-arts-official/scaleway-ops-mcp-server/actions/workflows/ci.yml)
+
 MCP server for Scaleway IAM (Applications, API keys, Policies, Permission sets) and Object
 Storage Bucket Policy management.
 
