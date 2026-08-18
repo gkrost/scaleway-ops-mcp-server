@@ -364,3 +364,45 @@ these are relied on in production.
 ## Enabling versioning then deleting objects leaves `delete_bucket` failing `BucketNotEmpty` (found 2026-08-18, full-feature-set test drive)
 
 Repro: `create_bucket` -> `set_bucket_versioning(Enabled)` -> `put_object` + `delete_object` -> `delete_bucket(confirm: true)` fails `BucketNotEmpty`, even though `scaleway_s3_list_objects` shows the bucket as empty. On a versioned bucket, `DeleteObject` creates a delete-marker instead of removing the underlying version - `list_objects` hides anything behind a delete-marker, but the non-current version is still there, so S3 correctly refuses the bucket delete. This server's Object Storage tools have no `ListObjectVersions`/version-scoped delete, so once versioning has been turned on there is no path back to an empty, deletable bucket through this MCP server alone - same class of gap as the Audit Trail export-job case above, requiring a raw S3 SDK/CLI call outside the server to purge version history before `delete_bucket` will succeed.
+
+## IAM Groups (issue #5): the issue's own API table was almost entirely correct, two small corrections
+
+Live-probed 2026-08-18 - notably more accurate than issue #6's table (which needed correcting on 4
+of 6 workstreams), because this one was checked against the endpoint-specific
+`/developers/api/iam/groups/` page rather than a general overview. Confirmed correct as spec'd:
+`GET`/`POST /groups`, `GET`/`PATCH`/`DELETE /groups/{id}`, `add-member`/`add-members`/`members`
+(PUT)/`remove-member` all use the flat field shapes the issue described (`user_id`/`application_id`
+singular for one-at-a-time, `user_ids[]`/`application_ids[]` plural arrays for bulk/overwrite - these
+are real JSON field names, not URL brackets). Two corrections:
+
+- **`list_groups`'s array filters are plain repeated query params, not bracket-suffixed.**
+  `?group_ids[]=<id>` (as literally written in the issue) returns `400 invalid_arguments`;
+  `?group_ids=<id>` (repeated for multiple: `&group_ids=<id2>`) is what actually works - confirmed
+  via a positive control (filtered to exactly the "Administrators" preset group by id). Same for
+  `user_ids`/`application_ids`.
+- **`name` is an EXACT match, not a substring filter.** `?name=Admin` against a group literally
+  named "Administrators" returns zero results; only `?name=Administrators` (the full exact name)
+  matches. Unlike `permissionSets.ts`'s `name_filter`, which is deliberately client-side substring
+  matching - don't assume the two work the same way.
+
+**Special groups (`managed`/`all_users`/`all_applications`) could not be tested live on this org** -
+`list_groups` returned exactly 3 groups (Administrators/Editors/Billing Administrators preset
+groups), all with `managed: false`. The tool-side refusal guard on `update_group`/`delete_group`/
+`set_group_members` is implemented per the issue's spec (matching `users.ts`'s owner-refusal
+pattern) but has never actually fired against a real special group - worth a deliberate live check
+if an org with one is ever available.
+
+**A `try/finally` cleanup block needs its own error path - `process.exit()` skips `finally`
+entirely.** Found while building this issue's smoke-test section: the file's shared `expectJson`
+helper calls `console.error` + `process.exit(1)` on failure, which is fine everywhere it's used
+top-level, but calling it *inside* a `try` block whose `finally` exists specifically to delete
+throwaway resources means a failure past that point leaves the resources behind - `process.exit()`
+terminates immediately, it does not unwind through pending `finally` blocks the way a thrown
+exception does. Hit this for real: a `create_policy` call failed (missing required `rules` field, a
+smoke-test bug, not a tool bug) partway through this section, and the throwaway group + Application
+it had already created were left on the live account, caught only by a manual follow-up
+`list_groups`/`list_applications` check. Fixed by adding a local `expectJsonOrThrow` (throws instead
+of exiting) for every call inside the `try` block - `finally` runs correctly on a thrown exception.
+The exact same bug, with the exact same fix, was already hit once before building issue #6's SSH-key
+CRUD section - worth remembering as a standing rule for any *future* try/finally cleanup block added
+to this file: never call `expectJson`/`process.exit` inside one, always throw.

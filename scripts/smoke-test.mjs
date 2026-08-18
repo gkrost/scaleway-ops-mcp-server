@@ -592,5 +592,142 @@ console.log("\nQUOTAS (issue #6): deferred - no dedicated Quotas API endpoint co
 console.log("attempts across IAM v1alpha1 and Account v2/v2alpha1/v3, org- and project-scoped). See");
 console.log("docs/gotchas.md and docs/capability-gap-analysis.md for the full evidence trail.");
 
+console.log("\n=== IAM GROUPS (issue #5): full happy-path lifecycle, zero blast radius ===");
+
+const groupsBaseline = expectJson(await client.callTool({ name: "scaleway_iam_list_groups", arguments: {} }), "list_groups (baseline)");
+console.log(`list_groups baseline: ${groupsBaseline.total_count} group(s) - ${groupsBaseline.groups.map((g) => g.name).join(", ")}`);
+const specialGroups = groupsBaseline.groups.filter((g) => g.managed || g.all_users || g.all_applications);
+console.log(`special (managed/all_users/all_applications) groups present: ${specialGroups.length} - guard is untested live if this is 0 (see docs/gotchas.md)`);
+
+// Like expectJson, but throws instead of process.exit(1) - required inside a try/finally so
+// cleanup still runs on failure (process.exit() skips pending finally blocks entirely).
+function expectJsonOrThrow(res, label) {
+  if (res.isError) throw new Error(`FAILED at "${label}": ${text(res)}`);
+  return JSON.parse(text(res));
+}
+
+let createdGroupId, throwawayAppId;
+try {
+  const groupName = `mcp-smoke-test-group-${Date.now()}`;
+  const createdGroup = expectJsonOrThrow(await client.callTool({ name: "scaleway_iam_create_group", arguments: { name: groupName, description: "smoke-test group" } }), "create_group");
+  createdGroupId = createdGroup.id;
+  console.log("created group:", createdGroupId, createdGroup.name);
+
+  const gotGroup = expectJsonOrThrow(await client.callTool({ name: "scaleway_iam_get_group", arguments: { group_id: createdGroupId } }), "get_group");
+  if (gotGroup.name !== groupName || gotGroup.user_ids.length !== 0) throw new Error(`get_group mismatch: ${JSON.stringify(gotGroup)}`);
+  console.log("get_group: echoes name, empty membership");
+
+  const byName = expectJsonOrThrow(await client.callTool({ name: "scaleway_iam_list_groups", arguments: { name: groupName } }), "list_groups (name filter)");
+  if (byName.total_count !== 1 || byName.groups[0].id !== createdGroupId) throw new Error(`list_groups name filter failed: ${JSON.stringify(byName)}`);
+  const byId = expectJsonOrThrow(await client.callTool({ name: "scaleway_iam_list_groups", arguments: { group_ids: [createdGroupId] } }), "list_groups (group_ids filter)");
+  if (byId.total_count !== 1 || byId.groups[0].id !== createdGroupId) throw new Error(`list_groups group_ids filter failed: ${JSON.stringify(byId)}`);
+  console.log("list_groups: name filter (exact) and group_ids filter both isolate the created group");
+
+  const renamedGroup = expectJsonOrThrow(
+    await client.callTool({ name: "scaleway_iam_update_group", arguments: { group_id: createdGroupId, name: `${groupName}-renamed`, description: "renamed" } }),
+    "update_group",
+  );
+  if (renamedGroup.name !== `${groupName}-renamed`) throw new Error("update_group name did not change");
+  console.log("update_group: renamed + description updated");
+
+  if (specialGroups.length > 0) {
+    const specialUpdate = await client.callTool({ name: "scaleway_iam_update_group", arguments: { group_id: specialGroups[0].id, name: "should-be-refused" } });
+    if (!specialUpdate.isError) throw new Error("update_group did not refuse a special group");
+    console.log("guard ok (special-group update refused):", text(specialUpdate).slice(0, 90));
+    const specialDelete = await client.callTool({ name: "scaleway_iam_delete_group", arguments: { group_id: specialGroups[0].id, confirm: true } });
+    if (!specialDelete.isError) throw new Error("delete_group did not refuse a special group");
+    console.log("guard ok (special-group delete refused):", text(specialDelete).slice(0, 90));
+  } else {
+    console.log("special-group guard: SKIPPED (none exist on this org) - refusal logic implemented per spec, unverified against a real one");
+  }
+
+  // Throwaway application, for membership testing - reuses the same create/delete pattern as the
+  // very first WRITE PATH section above.
+  const throwawayApp = expectJsonOrThrow(
+    await client.callTool({ name: "scaleway_iam_create_application", arguments: { name: `mcp-smoke-test-group-member-app-${Date.now()}`, description: "smoke-test group member - safe to delete" } }),
+    "create_application (group member)",
+  );
+  throwawayAppId = throwawayApp.id;
+  console.log("created throwaway application for membership tests:", throwawayAppId);
+
+  const addedOne = expectJsonOrThrow(
+    await client.callTool({ name: "scaleway_iam_add_group_member", arguments: { group_id: createdGroupId, application_id: throwawayAppId } }),
+    "add_group_member",
+  );
+  if (!addedOne.application_ids.includes(throwawayAppId)) throw new Error("add_group_member did not add the application");
+  console.log("add_group_member: application added");
+
+  const addNeitherRejected = await client.callTool({ name: "scaleway_iam_add_group_member", arguments: { group_id: createdGroupId } });
+  if (!addNeitherRejected.isError) throw new Error("add_group_member accepted neither user_id nor application_id");
+  console.log("guard ok (add_group_member with neither id rejected):", text(addNeitherRejected).slice(0, 90));
+
+  const addedMulti = expectJsonOrThrow(
+    await client.callTool({ name: "scaleway_iam_add_group_members", arguments: { group_id: createdGroupId, user_ids: [owner.id] } }),
+    "add_group_members",
+  );
+  if (!addedMulti.user_ids.includes(owner.id) || !addedMulti.application_ids.includes(throwawayAppId)) {
+    throw new Error(`add_group_members did not preserve existing + add new: ${JSON.stringify(addedMulti)}`);
+  }
+  console.log("add_group_members: additive - both members present (proves existing membership was preserved)");
+
+  const overwritten = expectJsonOrThrow(
+    await client.callTool({ name: "scaleway_iam_set_group_members", arguments: { group_id: createdGroupId, user_ids: [], application_ids: [throwawayAppId], confirm: true } }),
+    "set_group_members",
+  );
+  if (overwritten.user_ids.length !== 0 || !overwritten.application_ids.includes(throwawayAppId)) {
+    throw new Error(`set_group_members did not full-replace as expected: ${JSON.stringify(overwritten)}`);
+  }
+  console.log("set_group_members: full-replace confirmed - the owner user_id is gone, only the application remains (H3 resolved)");
+
+  const setWithoutConfirm = await client.callTool({ name: "scaleway_iam_set_group_members", arguments: { group_id: createdGroupId, user_ids: [], application_ids: [] } });
+  if (!setWithoutConfirm.isError) throw new Error("set_group_members accepted a call without confirm");
+  console.log("guard ok (set_group_members without confirm rejected)");
+
+  const removeWithoutConfirm = await client.callTool({ name: "scaleway_iam_remove_group_member", arguments: { group_id: createdGroupId, application_id: throwawayAppId } });
+  if (!removeWithoutConfirm.isError) throw new Error("remove_group_member accepted a call without confirm");
+  console.log("guard ok (remove_group_member without confirm rejected)");
+
+  const removed = expectJsonOrThrow(
+    await client.callTool({ name: "scaleway_iam_remove_group_member", arguments: { group_id: createdGroupId, application_id: throwawayAppId, confirm: true } }),
+    "remove_group_member",
+  );
+  if (removed.application_ids.includes(throwawayAppId)) throw new Error("remove_group_member did not remove the application");
+  console.log("remove_group_member: application removed - group membership now empty");
+
+  // Integration cross-check: the group_id principal a Policy tool already accepts actually works
+  // end to end - create a throwaway Policy naming this group, then clean it up.
+  const groupPolicy = expectJsonOrThrow(
+    await client.callTool({
+      name: "scaleway_iam_create_policy",
+      arguments: {
+        name: `mcp-smoke-test-group-policy-${Date.now()}`,
+        description: "smoke-test - safe to delete",
+        group_id: createdGroupId,
+        rules: [{ permission_set_names: ["IAMPolicyManager"], organization_id: creds.SCW_ORGANIZATION_ID }],
+      },
+    }),
+    "create_policy (group_id principal)",
+  );
+  console.log("create_policy: accepted this group's group_id as principal - integration loop closes");
+  const deletedPolicy = await client.callTool({ name: "scaleway_iam_delete_policy", arguments: { policy_id: groupPolicy.id, confirm: true } });
+  console.log("deleted cross-check policy:", text(deletedPolicy));
+
+  const deleteWithoutConfirm = await client.callTool({ name: "scaleway_iam_delete_group", arguments: { group_id: createdGroupId } });
+  if (!deleteWithoutConfirm.isError) throw new Error("delete_group accepted a call without confirm");
+  console.log("guard ok (delete_group without confirm rejected)");
+} finally {
+  if (throwawayAppId) {
+    const deletedApp = await client.callTool({ name: "scaleway_iam_delete_application", arguments: { application_id: throwawayAppId, confirm: true } });
+    console.log("deleted throwaway application (cleanup):", text(deletedApp));
+  }
+  if (createdGroupId) {
+    const deletedGroup = await client.callTool({ name: "scaleway_iam_delete_group", arguments: { group_id: createdGroupId, confirm: true } });
+    console.log("deleted throwaway group (cleanup):", text(deletedGroup));
+  }
+}
+const groupsAfter = expectJson(await client.callTool({ name: "scaleway_iam_list_groups", arguments: {} }), "list_groups (after cleanup)");
+if (groupsAfter.groups.some((g) => g.id === createdGroupId)) throw new Error("throwaway group still present after delete");
+console.log(`verify gone: throwaway group no longer in list_groups (back to ${groupsAfter.total_count}, zero residue)`);
+
 await client.close();
-console.log("\nDONE - full read/write/delete lifecycle verified (applications, API keys, buckets, objects, ssh keys)");
+console.log("\nDONE - full read/write/delete lifecycle verified (applications, API keys, buckets, objects, ssh keys, groups)");
