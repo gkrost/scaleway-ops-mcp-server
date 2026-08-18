@@ -53,7 +53,7 @@ const createSchema = {
     .max(64)
     .describe(
       "Policy name (max 64 chars, Scaleway API limit). Convention in this org: match the principal Application's " +
-        "own name 1:1 (e.g. Application 'dev-zvg-files-rw' -> Policy 'dev-zvg-files-rw'). When one Application " +
+        "own name 1:1 (e.g. Application 'dev-payments-files-rw' -> Policy 'dev-payments-files-rw'). When one Application " +
         "genuinely needs two policies (Scaleway's rule scope_type restriction - see scaleway_iam_list_permission_sets), " +
         "suffix the second with what it specifically adds, not a restatement of the app name.",
     ),

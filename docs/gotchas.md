@@ -1,6 +1,6 @@
 # Scaleway API gotchas this server exists to paper over
 
-All found empirically, 2026-08-12, provisioning the `zvg-backups-least-privilege` credential for
+All found empirically, 2026-08-12, provisioning a least-privilege backup credential for
 an unrelated project before this server existed - documented here so the next thing that hits them
 doesn't have to rediscover them by trial and error.
 

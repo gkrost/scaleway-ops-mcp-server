@@ -23,7 +23,7 @@ const createSchema = {
     .max(64)
     .describe(
       "Application name (max 64 chars, Scaleway API limit). Convention in this org: '<env>-<scope>-<level>' for " +
-        "service credentials held by deployed code (e.g. 'dev-zvg-files-rw'), 'ops-<name>-<level>' for operator/tool " +
+        "service credentials held by deployed code (e.g. 'dev-payments-files-rw'), 'ops-<name>-<level>' for operator/tool " +
         "identities that administer the account directly (e.g. 'ops-scaleway-mcp-admin'). env ∈ {prod,dev,local,ci,shared}, " +
         "level ∈ {ro,rw,admin,full}. Name must describe the grant that actually exists, not the one intended.",
     ),
