@@ -88,9 +88,9 @@ Via Claude Code / any MCP client, as a stdio server:
 **IAM Groups** (issue #5; completes the `group_id` principal loop policy tools already accept - fully live-verified, zero blast radius)
 - `scaleway_iam_list_groups` (name is EXACT match, not substring), `scaleway_iam_get_group`
 - `scaleway_iam_create_group` (no confirm - reversible, no side effects to anyone), `scaleway_iam_update_group` (name/description/tags)
-- `scaleway_iam_delete_group` (confirm-guarded; refuses Scaleway-managed/special groups tool-side)
-- `scaleway_iam_add_group_member` (one user and/or one application), `scaleway_iam_add_group_members` (bulk, additive)
-- `scaleway_iam_set_group_members` (confirm-guarded; FULL-REPLACE - omitted members are removed), `scaleway_iam_remove_group_member` (confirm-guarded)
+- `scaleway_iam_delete_group` (confirm-guarded; refuses managed/special/`deletable=false` groups tool-side)
+- `scaleway_iam_add_group_member` (one user and/or one application), `scaleway_iam_add_group_members` (bulk, additive) — both refuse managed/special/`editable=false` groups
+- `scaleway_iam_set_group_members` (confirm-guarded; FULL-REPLACE - omitted members are removed), `scaleway_iam_remove_group_member` (confirm-guarded) — same special/non-editable refusal
 
 **IAM SSH Keys** (issue #6; `projects`-scope permission, unlike this server's other IAM tools - see gotchas)
 - `scaleway_iam_list_ssh_keys`, `scaleway_iam_get_ssh_key`, `scaleway_iam_create_ssh_key` (public keys only - rejects anything that looks like a private key), `scaleway_iam_update_ssh_key` (rename only), `scaleway_iam_delete_ssh_key` (confirm-guarded)

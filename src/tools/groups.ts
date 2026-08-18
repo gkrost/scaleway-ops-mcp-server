@@ -13,10 +13,10 @@ import { toolJsonResult, toolError } from "../output.js";
  *    query params (`?group_ids=a&group_ids=b`), NOT bracket-suffixed (`group_ids[]=...` -> 400).
  *  - `name` is an EXACT match, not a substring filter (confirmed: "Admin" -> 0 results,
  *    "Administrators" -> 1) - unlike permissionSets.ts's client-side name_filter.
- * This org has no `managed`/`all_users`/`all_applications` groups to test the refusal guard
- * against live (all 3 preset groups - Administrators/Editors/Billing Administrators - read
- * `managed: false`) - the guard is implemented per the issue's spec and documented as untested
- * against a real special group.
+ * This org has no `managed`/`all_users`/`all_applications` groups to test that half of the
+ * refusal guard against live (all 3 preset groups read `managed: false`). The guard also
+ * refuses `editable=false` / `deletable=false`, and runs on every membership mutation
+ * (add/remove/set) as well as update/delete.
  */
 interface Group {
   id: string;
@@ -54,10 +54,27 @@ function groupView(g: Group) {
   };
 }
 
-function refuseIfSpecial(g: Group, action: string): string | null {
+function refuseIfSpecial(
+  g: Group,
+  action: string,
+  opts: { needEditable?: boolean; needDeletable?: boolean } = {},
+): string | null {
   if (g.managed || g.all_users || g.all_applications) {
-    const which = g.all_users ? "the 'All Users' group" : g.all_applications ? "the 'All Applications' group" : "a Scaleway-managed group";
+    const which = g.all_users
+      ? "the 'All Users' group"
+      : g.all_applications
+        ? "the 'All Applications' group"
+        : "a Scaleway-managed group";
     return `Refusing to ${action} ${g.id}: it is ${which} (managed=${g.managed}, all_users=${g.all_users}, all_applications=${g.all_applications}). These are provisioned by Scaleway and not meant to be edited/deleted here - the API itself is also expected to reject it.`;
+  }
+  // Spec: special groups are also editable=false / deletable=false. This org's preset
+  // Administrators/Editors/Billing groups report managed=false, so the flags above never fire
+  // on them — the editable/deletable bits are what would actually refuse those presets.
+  if (opts.needEditable && g.editable === false) {
+    return `Refusing to ${action} ${g.id} (${g.name}): editable=false.`;
+  }
+  if (opts.needDeletable && g.deletable === false) {
+    return `Refusing to ${action} ${g.id} (${g.name}): deletable=false.`;
   }
   return null;
 }
@@ -151,15 +168,17 @@ export function registerGroups(server: McpServer, config: Config) {
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    async ({ group_id, name, description, tags }) => {
-      const current = await iamRequest<Group>(config, "GET", `/groups/${group_id}`);
-      const refusal = refuseIfSpecial(current, "update");
-      if (refusal) return toolError(refusal);
-      return withIamErrorHandling(async () => {
+    async ({ group_id, name, description, tags }) =>
+      withIamErrorHandling(async () => {
+        if (name === undefined && description === undefined && tags === undefined) {
+          return toolError("Provide at least one of name, description, or tags.");
+        }
+        const current = await iamRequest<Group>(config, "GET", `/groups/${group_id}`);
+        const refusal = refuseIfSpecial(current, "update", { needEditable: true });
+        if (refusal) return toolError(refusal);
         const g = await iamRequest<Group>(config, "PATCH", `/groups/${group_id}`, { name, description, tags });
         return toolJsonResult(groupView(g), config.MAX_OUTPUT_CHARS);
-      });
-    },
+      }),
   );
 
   server.registerTool(
@@ -174,15 +193,14 @@ export function registerGroups(server: McpServer, config: Config) {
       inputSchema: { group_id: groupIdField, confirm: confirmField },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    async ({ group_id }) => {
-      const current = await iamRequest<Group>(config, "GET", `/groups/${group_id}`);
-      const refusal = refuseIfSpecial(current, "delete");
-      if (refusal) return toolError(refusal);
-      return withIamErrorHandling(async () => {
+    async ({ group_id }) =>
+      withIamErrorHandling(async () => {
+        const current = await iamRequest<Group>(config, "GET", `/groups/${group_id}`);
+        const refusal = refuseIfSpecial(current, "delete", { needDeletable: true });
+        if (refusal) return toolError(refusal);
         await iamRequest<void>(config, "DELETE", `/groups/${group_id}`);
         return toolJsonResult({ deleted: true, group_id }, config.MAX_OUTPUT_CHARS);
-      });
-    },
+      }),
   );
 
   const memberRefSchema = {
@@ -203,25 +221,29 @@ export function registerGroups(server: McpServer, config: Config) {
       description:
         "Add one User and/or one Application to a Group in a single call (both may be given at once - it's not " +
         "either/or). Grants that member every permission any Policy attaches to this group's group_id, " +
-        "immediately. Existing members are preserved.",
+        "immediately. Existing members are preserved. Refuses Scaleway-managed/special or non-editable groups.",
       inputSchema: memberRefSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async ({ group_id, user_id, application_id }) => {
-      const err = requireAtLeastOneMember(user_id, application_id);
-      if (err) return toolError(err);
-      return withIamErrorHandling(async () => {
+    async ({ group_id, user_id, application_id }) =>
+      withIamErrorHandling(async () => {
+        const err = requireAtLeastOneMember(user_id, application_id);
+        if (err) return toolError(err);
+        const current = await iamRequest<Group>(config, "GET", `/groups/${group_id}`);
+        const refusal = refuseIfSpecial(current, "add a member to", { needEditable: true });
+        if (refusal) return toolError(refusal);
         const g = await iamRequest<Group>(config, "POST", `/groups/${group_id}/add-member`, { user_id, application_id });
         return toolJsonResult(groupView(g), config.MAX_OUTPUT_CHARS);
-      });
-    },
+      }),
   );
 
   server.registerTool(
     "scaleway_iam_add_group_members",
     {
       title: "Add multiple members to a Scaleway IAM Group",
-      description: "Add multiple Users and/or Applications to a Group at once. Existing members are preserved - this is additive, not a replace.",
+      description:
+        "Add multiple Users and/or Applications to a Group at once. Existing members are preserved - this is " +
+        "additive, not a replace. Refuses Scaleway-managed/special or non-editable groups.",
       inputSchema: {
         group_id: groupIdField,
         user_ids: z.array(z.string().uuid()).optional(),
@@ -229,13 +251,17 @@ export function registerGroups(server: McpServer, config: Config) {
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async ({ group_id, user_ids, application_ids }) => {
-      if (!user_ids?.length && !application_ids?.length) return toolError("Provide at least one user_id or application_id.");
-      return withIamErrorHandling(async () => {
+    async ({ group_id, user_ids, application_ids }) =>
+      withIamErrorHandling(async () => {
+        if (!user_ids?.length && !application_ids?.length) {
+          return toolError("Provide at least one of user_ids or application_ids.");
+        }
+        const current = await iamRequest<Group>(config, "GET", `/groups/${group_id}`);
+        const refusal = refuseIfSpecial(current, "add members to", { needEditable: true });
+        if (refusal) return toolError(refusal);
         const g = await iamRequest<Group>(config, "POST", `/groups/${group_id}/add-members`, { user_ids, application_ids });
         return toolJsonResult(groupView(g), config.MAX_OUTPUT_CHARS);
-      });
-    },
+      }),
   );
 
   server.registerTool(
@@ -254,16 +280,15 @@ export function registerGroups(server: McpServer, config: Config) {
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ group_id, user_ids, application_ids }) => {
-      const current = await iamRequest<Group>(config, "GET", `/groups/${group_id}`);
-      const refusal = refuseIfSpecial(current, "overwrite membership of");
-      if (refusal) return toolError(refusal);
-      return withIamErrorHandling(async () => {
+    async ({ group_id, user_ids, application_ids }) =>
+      withIamErrorHandling(async () => {
+        const current = await iamRequest<Group>(config, "GET", `/groups/${group_id}`);
+        const refusal = refuseIfSpecial(current, "overwrite membership of", { needEditable: true });
+        if (refusal) return toolError(refusal);
         await iamRequest<void>(config, "PUT", `/groups/${group_id}/members`, { user_ids, application_ids });
         const g = await iamRequest<Group>(config, "GET", `/groups/${group_id}`);
         return toolJsonResult(groupView(g), config.MAX_OUTPUT_CHARS);
-      });
-    },
+      }),
   );
 
   server.registerTool(
@@ -273,17 +298,19 @@ export function registerGroups(server: McpServer, config: Config) {
       description:
         "Remove one User and/or one Application from a Group. Requires confirm=true. That member immediately " +
         "loses every permission this group's attached Policies granted them - check they don't rely solely on " +
-        "this group for access they still need.",
+        "this group for access they still need. Refuses Scaleway-managed/special or non-editable groups.",
       inputSchema: { ...memberRefSchema, confirm: confirmField },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    async ({ group_id, user_id, application_id }) => {
-      const err = requireAtLeastOneMember(user_id, application_id);
-      if (err) return toolError(err);
-      return withIamErrorHandling(async () => {
+    async ({ group_id, user_id, application_id }) =>
+      withIamErrorHandling(async () => {
+        const err = requireAtLeastOneMember(user_id, application_id);
+        if (err) return toolError(err);
+        const current = await iamRequest<Group>(config, "GET", `/groups/${group_id}`);
+        const refusal = refuseIfSpecial(current, "remove a member from", { needEditable: true });
+        if (refusal) return toolError(refusal);
         const g = await iamRequest<Group>(config, "POST", `/groups/${group_id}/remove-member`, { user_id, application_id });
         return toolJsonResult(groupView(g), config.MAX_OUTPUT_CHARS);
-      });
-    },
+      }),
   );
 }

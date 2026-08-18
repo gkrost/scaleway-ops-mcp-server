@@ -100,7 +100,6 @@ of this writing - every item originally listed as out of scope has since been im
 remaining gap elsewhere is tracked as its own GitHub issue (labeled `scaleway`) rather than left
 implicit:
 [#3](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/3) policy clone,
-[#4](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/4) Users,
 [#9](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/9) Audit Trail's broader surface.
 [#7](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/7) bucket configuration and
 [#8](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/8) object-level operations

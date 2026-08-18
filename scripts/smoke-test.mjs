@@ -596,8 +596,12 @@ console.log("\n=== IAM GROUPS (issue #5): full happy-path lifecycle, zero blast 
 
 const groupsBaseline = expectJson(await client.callTool({ name: "scaleway_iam_list_groups", arguments: {} }), "list_groups (baseline)");
 console.log(`list_groups baseline: ${groupsBaseline.total_count} group(s) - ${groupsBaseline.groups.map((g) => g.name).join(", ")}`);
-const specialGroups = groupsBaseline.groups.filter((g) => g.managed || g.all_users || g.all_applications);
-console.log(`special (managed/all_users/all_applications) groups present: ${specialGroups.length} - guard is untested live if this is 0 (see docs/gotchas.md)`);
+const specialGroups = groupsBaseline.groups.filter(
+  (g) => g.managed || g.all_users || g.all_applications || g.editable === false || g.deletable === false,
+);
+console.log(
+  `special/non-editable groups present: ${specialGroups.length} - ${specialGroups.map((g) => `${g.name}(editable=${g.editable},deletable=${g.deletable},managed=${g.managed})`).join(", ") || "none; managed-flag guard untested live (see docs/gotchas.md)"}`,
+);
 
 // Like expectJson, but throws instead of process.exit(1) - required inside a try/finally so
 // cleanup still runs on failure (process.exit() skips pending finally blocks entirely).

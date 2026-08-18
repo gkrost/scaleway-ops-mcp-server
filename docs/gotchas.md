@@ -387,10 +387,12 @@ are real JSON field names, not URL brackets). Two corrections:
 
 **Special groups (`managed`/`all_users`/`all_applications`) could not be tested live on this org** -
 `list_groups` returned exactly 3 groups (Administrators/Editors/Billing Administrators preset
-groups), all with `managed: false`. The tool-side refusal guard on `update_group`/`delete_group`/
-`set_group_members` is implemented per the issue's spec (matching `users.ts`'s owner-refusal
-pattern) but has never actually fired against a real special group - worth a deliberate live check
-if an org with one is ever available.
+groups), all with `managed: false`. The tool-side refusal therefore also checks `editable` /
+`deletable` (the bits the spec says those special groups carry), and it now runs on every
+membership mutation (`add_group_member(s)`, `set_group_members`, `remove_group_member`) as well as
+`update_group`/`delete_group`. The `managed`/`all_users`/`all_applications` flags themselves have
+never fired against a real special group on this org - worth a deliberate live check if an org
+with one is ever available.
 
 **A `try/finally` cleanup block needs its own error path - `process.exit()` skips `finally`
 entirely.** Found while building this issue's smoke-test section: the file's shared `expectJson`
