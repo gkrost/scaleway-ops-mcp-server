@@ -222,3 +222,11 @@ key) that turned out to be a permission classifier gating those specific actions
 environment - unrelated to anything about Scaleway's own API or console. Not relevant here since
 this server talks to the API directly, but noted in case a future console-automation attempt hits
 the same wall.
+
+No repeat of that friction during #8's console cross-validation (2026-08-18) - uploading via the
+Files tab went through cleanly via browser automation. One console-only step worth knowing about
+though: the console's drag-and-drop/file-picker upload always interposes a "Storage class" modal
+(Standard Multi-AZ vs. others) before the upload actually starts, even for a single small file -
+there's no default-and-skip. `scaleway_s3_put_object` has no such step (S3's `PutObject` doesn't
+require a storage class; Scaleway defaults it), so an MCP upload and a console upload of the same
+file take genuinely different paths to the same result, not just a UI-vs-API skin over one flow.

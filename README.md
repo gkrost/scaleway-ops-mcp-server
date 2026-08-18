@@ -32,6 +32,7 @@ Environment variables (see `.env.example`):
 | `SCW_PROJECT_ID` | yes | Default Project (used as `default_project_id` when creating API keys, and wherever a Project id is needed but not explicitly passed). |
 | `SCW_DEFAULT_REGION` | no (default `fr-par`) | Region for Bucket Policy calls when a tool call doesn't specify one. |
 | `MAX_OUTPUT_CHARS` | no (default `25000`) | Truncation limit for tool responses. |
+| `MAX_PUT_OBJECT_BYTES` | no (default `5000000`) | Decoded-size ceiling for `scaleway_s3_put_object` - single-part only, multipart is out of scope. |
 
 **The credential this server runs as needs its own IAM Policy** granting (at minimum)
 `IAMApplicationManager` + `IAMPolicyManager` (organization scope) and `ObjectStorageFullAccess`
@@ -85,6 +86,12 @@ Via Claude Code / any MCP client, as a stdio server:
 **Object Storage Bucket Policies**
 - `scaleway_s3_get_bucket_policy`, `scaleway_s3_put_bucket_policy`, `scaleway_s3_delete_bucket_policy`
 
+**Object Storage Objects** (single-part only; multipart/large-file upload is out of scope)
+- `scaleway_s3_put_object`, `scaleway_s3_get_object`, `scaleway_s3_list_objects`, `scaleway_s3_head_object`, `scaleway_s3_copy_object`, `scaleway_s3_delete_object`, `scaleway_s3_delete_objects`
+- `put_object`/`get_object` carry binary payloads as base64 (`encoding: "base64"`); decoded size is capped by `MAX_PUT_OBJECT_BYTES` (default 5 MB). `get_object` auto-detects UTF-8 text vs. binary and returns `encoding` accordingly.
+- `scaleway_s3_get_object_tags`, `scaleway_s3_put_object_tags` (`put` replaces the whole tag set, same replace-not-merge semantics as `put_bucket_policy`)
+- `scaleway_s3_generate_presigned_url` - time-limited GET/PUT URL for handing direct object access to something outside MCP, without exposing this server's credential.
+
 **Audit Trail — event queries** (read-only; all need `AuditTrailReadOnly` on this server's credential - grant via `scaleway_iam_set_policy_rules`)
 - `scaleway_audit_list_events` - who did what, when, from where (API/resource activity).
 - `scaleway_audit_list_authentication_events` - authentication activity (login/token/MFA outcomes) - separate endpoint.
@@ -104,10 +111,12 @@ Via Claude Code / any MCP client, as a stdio server:
 ## Scope
 
 Deliberately narrow: IAM identity/policy management, Bucket Policies (plus minimal bucket
-create/list/delete, since a policy needs a bucket to attach to), and Audit Trail (event queries,
-alert rules, export jobs), because that's what actually caused friction so far. Not a general Scaleway API wrapper - no compute,
-databases, containers, no bucket visibility/encryption/versioning/lifecycle-rules/website config,
-etc. Extend it the same way if/when those become a recurring need too.
+create/list/delete, since a policy needs a bucket to attach to), Object Storage object CRUD
+(put/get/list/head/copy/delete/tags/presigned URLs, single-part only), and Audit Trail (event
+queries, alert rules, export jobs), because that's what actually caused friction so far. Not a
+general Scaleway API wrapper - no compute, databases, containers, no bucket
+visibility/encryption/versioning/lifecycle-rules/website config, no multipart upload, etc. Extend it
+the same way if/when those become a recurring need too.
 
 ## Dev
 
