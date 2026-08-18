@@ -150,6 +150,30 @@ itself fail `permissions_denied`, since the credential attempting it no longer h
 that call requires. `SetRules` has no such window: the policy object, and everything that already
 depends on its `id`, never stops existing.
 
+## `POST /policies/{id}/clone` ignores its request body and always returns the clone unattached
+
+Confirmed empirically 2026-08-18, reviewing `scaleway_iam_clone_policy`: the clone endpoint copies
+rules correctly but silently drops the principal and tags regardless of what's passed - the clone
+always comes back `no_principal: true` with `tags: []`, even when the request body explicitly
+includes `application_id`/`user_id`/`group_id`/`name` overrides (all silently ignored; the name gets
+Scaleway's own `"Copy of <source name>"` default, not an override). Worse than just a doc gap: since
+`scaleway_iam_update_policy` only patches `name`/`description`/`tags` (never a principal field),
+there was briefly no way to reattach a clone's principal through this server at all. Confirmed via a
+direct `PATCH /policies/{id}` call that Scaleway's API *does* accept and apply `application_id` -
+it's this server's tool schema that didn't expose it, not an API limitation. `clone_policy` now
+follows its `POST .../clone` with a `PATCH` restoring the source's principal and tags before
+returning, so the tool actually delivers an exact copy instead of an orphaned one.
+
+## `nb_rules`/`nb_permission_sets` can read 0 immediately after `create_policy` or `clone_policy`, even though the rules did apply
+
+Confirmed empirically 2026-08-18, live-retesting: the `Policy` object returned directly by
+`POST /policies` (and by extension `POST /policies/{id}/clone`) can report `nb_rules: 0` in that same
+response even though the rules were in fact created - a follow-up `scaleway_iam_get_policy` or
+`scaleway_iam_list_policy_rules` on the same policy immediately afterward shows the correct count and
+the actual rules. Looks like the count lags the write by a moment. Not a bug in this server (it
+passes Scaleway's response through as-is) - just don't read a `0` in a `create`/`clone` response as
+"the rules didn't take"; call `scaleway_iam_list_policy_rules` for ground truth if in doubt.
+
 ## Audit Trail needs its own permission set, and it's organization-scoped
 
 `scaleway_audit_list_events` needs `AuditTrailReadOnly` (or `OrganizationManager`) - not implied by
