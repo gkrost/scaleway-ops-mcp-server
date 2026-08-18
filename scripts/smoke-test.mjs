@@ -496,5 +496,101 @@ if (!badCreate.isError || !text(badCreate).includes("email")) { console.error("F
 console.log("api err ok (create invalid email rejected):", text(badCreate).slice(0, 110));
 console.log("users: path-2 verification complete - reads live-verified, mutations guard+error verified, zero writes to real humans");
 
+console.log("\n=== IAM SSH KEYS / JWTs / SAML / SCIM / Security Settings (issue #6) ===");
+
+// SSH keys: full CRUD live, try/finally so a throwaway key is never left behind even on failure.
+// A hardcoded throwaway ed25519 public key (generated once for this purpose, private half discarded
+// immediately, never reused/committed) - Scaleway validates key format, not that it's "real"/in-use.
+const throwawayPublicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGWnTSmjgmGkchKTBiy8DJpG3YWNQXaHTHsL5aeuZTJU mcp-smoke-test-throwaway";
+let createdSshKeyId;
+try {
+  const createdKey = expectJson(
+    await client.callTool({ name: "scaleway_iam_create_ssh_key", arguments: { name: `mcp-smoke-test-ssh-key-${Date.now()}`, public_key: throwawayPublicKey } }),
+    "create_ssh_key",
+  );
+  createdSshKeyId = createdKey.id;
+  console.log("created ssh key:", createdSshKeyId, createdKey.fingerprint);
+
+  const gotKey = expectJson(await client.callTool({ name: "scaleway_iam_get_ssh_key", arguments: { ssh_key_id: createdSshKeyId } }), "get_ssh_key");
+  // Compare on the key material + type only - Scaleway may reformat whitespace/trailing newline
+  // or drop/alter the comment field, none of which is the part that actually matters.
+  const normalize = (k) => k.trim().split(/\s+/).slice(0, 2).join(" ");
+  if (normalize(gotKey.public_key) !== normalize(throwawayPublicKey)) {
+    throw new Error(`get_ssh_key public_key mismatch: sent=${JSON.stringify(throwawayPublicKey)} got=${JSON.stringify(gotKey.public_key)}`);
+  }
+  console.log("get_ssh_key: public_key matches (key type + material)");
+
+  const sshList = expectJson(await client.callTool({ name: "scaleway_iam_list_ssh_keys", arguments: {} }), "list_ssh_keys");
+  if (!sshList.ssh_keys.some((k) => k.id === createdSshKeyId)) throw new Error("list_ssh_keys missing the created key");
+  console.log(`list_ssh_keys: found created key among ${sshList.total_count} total (the account's own real key is among them - never touched)`);
+
+  const renamedKey = expectJson(
+    await client.callTool({ name: "scaleway_iam_update_ssh_key", arguments: { ssh_key_id: createdSshKeyId, name: "mcp-smoke-test-ssh-key-renamed" } }),
+    "update_ssh_key",
+  );
+  if (renamedKey.name !== "mcp-smoke-test-ssh-key-renamed") throw new Error("update_ssh_key name did not change");
+  console.log("update_ssh_key: renamed");
+
+  // Client-side private-key rejection guard - must never reach the API
+  const rejectedPrivate = await client.callTool({
+    name: "scaleway_iam_create_ssh_key",
+    arguments: { name: "should-never-be-created", public_key: "-----BEGIN OPENSSH PRIVATE KEY-----\nfakefakefake\n-----END OPENSSH PRIVATE KEY-----" },
+  });
+  if (!rejectedPrivate.isError) throw new Error("create_ssh_key accepted a PEM private-key block");
+  console.log("guard ok (private key rejected client-side):", text(rejectedPrivate).slice(0, 80));
+} finally {
+  // finally runs even if the try block throws - the throwaway key is never left behind.
+  if (createdSshKeyId) {
+    const deletedKey = await client.callTool({ name: "scaleway_iam_delete_ssh_key", arguments: { ssh_key_id: createdSshKeyId, confirm: true } });
+    console.log("deleted ssh key (cleanup):", text(deletedKey));
+  }
+}
+const sshListAfter = expectJson(await client.callTool({ name: "scaleway_iam_list_ssh_keys", arguments: {} }), "list_ssh_keys (after cleanup)");
+if (sshListAfter.ssh_keys.some((k) => k.id === createdSshKeyId)) { console.error("FAILED: throwaway ssh key still present after delete"); process.exit(1); }
+console.log("verify gone: throwaway ssh key no longer in list_ssh_keys, zero residue");
+
+// JWTs: live-probed 2026-08-18 that this Application/API-key credential gets 403 on 'self_jwt' even
+// with full IAMManager - documenting that as the expected result rather than treating it as a failure.
+const jwtProbe = await client.callTool({ name: "scaleway_iam_list_jwts", arguments: { audience_id: owner.id } });
+console.log(`jwts: list against the org owner's id -> isError=${jwtProbe.isError}, ${text(jwtProbe).slice(0, 140)} (403/self_jwt expected - documented API-key limitation, not a test failure)`);
+
+// SAML / SCIM: GET must show "not configured" (the correct, safe default state) - and every mutating
+// tool is guard-tested ONLY. Never call enable/disable live - see docs/gotchas.md for why.
+const samlGet = await client.callTool({ name: "scaleway_iam_get_saml_config", arguments: {} });
+if (!samlGet.isError) { console.error("FAILED: expected SAML to read as not-configured, got a config:", text(samlGet)); process.exit(1); }
+console.log("get_saml_config: not configured (expected default state)");
+const scimGet = await client.callTool({ name: "scaleway_iam_get_scim_config", arguments: {} });
+if (!scimGet.isError) { console.error("FAILED: expected SCIM to read as not-configured, got a config:", text(scimGet)); process.exit(1); }
+console.log("get_scim_config: not configured (expected default state)");
+
+for (const [name, args, label] of [
+  ["scaleway_iam_enable_saml", { entity_id: "https://idp.example.invalid", single_sign_on_url: "https://idp.example.invalid/sso" }, "enable_saml without confirm"],
+  ["scaleway_iam_disable_saml", {}, "disable_saml without confirm"],
+  ["scaleway_iam_enable_scim", {}, "enable_scim without confirm"],
+  ["scaleway_iam_disable_scim", {}, "disable_scim without confirm"],
+  ["scaleway_iam_delete_jwt", { jti: bogusId }, "delete_jwt without confirm"],
+]) {
+  const res = await client.callTool({ name, arguments: args });
+  if (!res.isError) { console.error(`FAILED at "${label}": expected schema rejection, got success`); process.exit(1); }
+  console.log(`guard ok (${label}): rejected`);
+}
+console.log("saml/scim/jwt mutations: guard-tested only, never called live - org-wide state, see verification protocol in issue #6");
+
+// Security Settings: real live read, plus ONE genuinely safe live mutation call - an update with
+// confirm:true and no other fields changes nothing (live-confirmed while building this: Security
+// Settings' PATCH follows real "only passed fields change" semantics, unlike SAML/SCIM's enable).
+const secBefore = expectJson(await client.callTool({ name: "scaleway_iam_get_security_settings", arguments: {} }), "get_security_settings");
+console.log("security settings:", JSON.stringify(secBefore));
+const secNoop = expectJson(await client.callTool({ name: "scaleway_iam_update_security_settings", arguments: { confirm: true } }), "update_security_settings (no-op)");
+if (JSON.stringify(secNoop) !== JSON.stringify(secBefore)) {
+  console.error(`FAILED: no-op update_security_settings changed values: before=${JSON.stringify(secBefore)} after=${JSON.stringify(secNoop)}`);
+  process.exit(1);
+}
+console.log("update_security_settings: confirm-only no-op call left every value unchanged, as expected");
+
+console.log("\nQUOTAS (issue #6): deferred - no dedicated Quotas API endpoint could be found live (10+ path");
+console.log("attempts across IAM v1alpha1 and Account v2/v2alpha1/v3, org- and project-scoped). See");
+console.log("docs/gotchas.md and docs/capability-gap-analysis.md for the full evidence trail.");
+
 await client.close();
-console.log("\nDONE - full read/write/delete lifecycle verified (applications, API keys, buckets, objects)");
+console.log("\nDONE - full read/write/delete lifecycle verified (applications, API keys, buckets, objects, ssh keys)");
