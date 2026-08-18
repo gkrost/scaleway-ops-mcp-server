@@ -233,10 +233,18 @@ All live-verified 2026-08-18 against fr-par with throwaway buckets (probe script
 - After lock is enabled, versioning is frozen: `PutBucketVersioning Suspended` fails `InvalidBucketState: An Object Lock configuration is present on this bucket, so the versioning state cannot be changed.`
 - An empty bucket with lock + versioning enabled still deletes normally (`DeleteBucket` OK) - no residue trap there.
 
-## S3 bucket encryption config on Scaleway is declarative metadata, not an encryption switch (issue #7)
+## S3 bucket encryption config on Scaleway is a real, toggleable setting - an earlier version of this entry claimed otherwise and was wrong (issue #7 / PR #13)
 
-`GetBucketEncryption` on a fresh bucket returns HTTP 200 with an **empty** `ServerSideEncryptionConfiguration` (AWS returns a NotFound error instead); `PutBucketEncryption` (AES256) and `DeleteBucketEncryption` both succeed but change nothing about actual at-rest encryption - Scaleway encrypts all Object Storage platform-side regardless. The tools exist for S3-API-compatibility/tooling that expects a config object; their descriptions say exactly this.
+`GetBucketEncryption` on a fresh bucket returns HTTP 200 with an **empty** `ServerSideEncryptionConfiguration` (AWS returns a NotFound error instead) - that part's confirmed. What the PR originally shipped got wrong: it claimed `PutBucketEncryption`/`DeleteBucketEncryption` "change nothing about actual at-rest encryption" and were declarative-only S3-API-compatibility filler. **Live-verified false** during PR #13's review pass, cross-checked against the console (2026-08-18): calling `scaleway_s3_put_bucket_encryption` visibly flips the bucket's Settings tab "Encryption type" from `Disabled` to `SSE-ONE encryption with Scaleway Object Native Encryption keys`, and `scaleway_s3_delete_bucket_encryption` reverts it back to `Disabled` - a real setting, not inert metadata. What exactly "SSE-ONE" changes about ciphertext/key handling at rest isn't independently confirmed here, only that the setting is real and the API calls control it - don't repeat the original claim that this is a no-op. Fixed in the tool descriptions and this entry. **Lesson repeated from the `/policies/{id}/clone` entry above**: a plausible-sounding "this is just metadata" claim, stated confidently from source/API-shape reasoning without an actual console cross-check, shipped wrong into a merged tool description - console/UI verification isn't optional polish for claims like this, it's the only way to catch them.
 
 ## S3 bucket logging and bucket metrics are NotImplemented on Scaleway (issue #7)
 
 `PutBucketLogging`/`GetBucketLogging` -> `NotImplemented: Action not implemented`; `GetBucketMetricsConfiguration` -> same. Access logging and metrics on Scaleway live elsewhere (Cockpit / console), not behind the S3 API - no tools exist for them and none are possible on this API surface.
+
+No repeat of that friction during #8's console cross-validation (2026-08-18) - uploading via the
+Files tab went through cleanly via browser automation. One console-only step worth knowing about
+though: the console's drag-and-drop/file-picker upload always interposes a "Storage class" modal
+(Standard Multi-AZ vs. others) before the upload actually starts, even for a single small file -
+there's no default-and-skip. `scaleway_s3_put_object` has no such step (S3's `PutObject` doesn't
+require a storage class; Scaleway defaults it), so an MCP upload and a console upload of the same
+file take genuinely different paths to the same result, not just a UI-vs-API skin over one flow.

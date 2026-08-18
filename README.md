@@ -32,6 +32,7 @@ Environment variables (see `.env.example`):
 | `SCW_PROJECT_ID` | yes | Default Project (used as `default_project_id` when creating API keys, and wherever a Project id is needed but not explicitly passed). |
 | `SCW_DEFAULT_REGION` | no (default `fr-par`) | Region for Bucket Policy calls when a tool call doesn't specify one. |
 | `MAX_OUTPUT_CHARS` | no (default `25000`) | Truncation limit for tool responses. |
+| `MAX_PUT_OBJECT_BYTES` | no (default `5000000`) | Decoded-size ceiling for `scaleway_s3_put_object` - single-part only, multipart is out of scope. |
 
 **The credential this server runs as needs its own IAM Policy** granting (at minimum)
 `IAMApplicationManager` + `IAMPolicyManager` (organization scope) and `ObjectStorageFullAccess`
@@ -89,12 +90,18 @@ Via Claude Code / any MCP client, as a stdio server:
 - Website: `scaleway_s3_get/put/delete_bucket_website` (put publishes an endpoint, needs confirm).
 - Visibility: `scaleway_s3_get/set_bucket_visibility` - coarse public/private via canned ACL (public needs confirm; Bucket Policies are the fine-grained mechanism).
 - Lifecycle rules: `scaleway_s3_get/put/delete_bucket_lifecycle` (put/delete confirm-guarded - expiration rules permanently delete objects).
-- Encryption config: `scaleway_s3_get/put/delete_bucket_encryption` - declarative S3-API metadata only; Scaleway encrypts at rest platform-side regardless.
+- Encryption config: `scaleway_s3_get/put/delete_bucket_encryption` - real, toggleable setting (console-confirmed), not inert metadata; see `docs/gotchas.md`.
 - Object Lock: `scaleway_s3_get_object_lock`, `scaleway_s3_enable_object_lock` (one-way: never disableable, versioning prerequisite handled, versioning frozen afterwards; create-time lock flag is silently ignored by Scaleway).
 - No tools for bucket logging or bucket metrics: Scaleway's S3 endpoint returns `NotImplemented` for both.
 
 **Object Storage Bucket Policies**
 - `scaleway_s3_get_bucket_policy`, `scaleway_s3_put_bucket_policy`, `scaleway_s3_delete_bucket_policy`
+
+**Object Storage Objects** (single-part only; multipart/large-file upload is out of scope)
+- `scaleway_s3_put_object`, `scaleway_s3_get_object`, `scaleway_s3_list_objects`, `scaleway_s3_head_object`, `scaleway_s3_copy_object`, `scaleway_s3_delete_object`, `scaleway_s3_delete_objects`
+- `put_object`/`get_object` carry binary payloads as base64 (`encoding: "base64"`); decoded size is capped by `MAX_PUT_OBJECT_BYTES` (default 5 MB). `get_object` auto-detects UTF-8 text vs. binary and returns `encoding` accordingly.
+- `scaleway_s3_get_object_tags`, `scaleway_s3_put_object_tags` (`put` replaces the whole tag set, same replace-not-merge semantics as `put_bucket_policy`)
+- `scaleway_s3_generate_presigned_url` - time-limited GET/PUT URL for handing direct object access to something outside MCP, without exposing this server's credential.
 
 **Audit Trail — event queries** (read-only; all need `AuditTrailReadOnly` on this server's credential - grant via `scaleway_iam_set_policy_rules`)
 - `scaleway_audit_list_events` - who did what, when, from where (API/resource activity).
@@ -115,10 +122,11 @@ Via Claude Code / any MCP client, as a stdio server:
 ## Scope
 
 Deliberately narrow: IAM identity/policy management, Bucket Policies, bucket lifecycle and
-configuration, and Audit Trail (event queries, alert rules, export jobs), because that's what
-actually caused friction so far. Not a general Scaleway API wrapper - no compute,
-databases, containers, no object-data operations (tracked in #8), no bucket logging/metrics
-(Scaleway's S3 API doesn't implement them). Extend it the same way if/when those become a recurring need too.
+configuration, Object Storage object CRUD (put/get/list/head/copy/delete/tags/presigned URLs,
+single-part only), and Audit Trail (event queries, alert rules, export jobs), because that's what
+actually caused friction so far. Not a general Scaleway API wrapper - no compute, databases,
+containers, no multipart upload, no bucket logging/metrics (Scaleway's S3 API doesn't implement
+them). Extend it the same way if/when those become a recurring need too.
 
 ## Dev
 

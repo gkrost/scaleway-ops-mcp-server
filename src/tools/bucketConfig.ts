@@ -85,7 +85,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
       title: "Delete Scaleway bucket tags",
       description: "Remove ALL tags from a bucket. Requires confirm=true. Reversible in the sense that tags can be re-applied, but the current set is lost.",
       inputSchema: { bucket: bucketField, region: regionField, confirm: confirmField },
-      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     async ({ bucket, region }) =>
       handleS3(async () => {
@@ -408,13 +408,13 @@ export function registerBucketConfig(server: McpServer, config: Config) {
       }),
   );
 
-  // ---------- Encryption (declarative config) ----------
+  // ---------- Encryption ----------
   server.registerTool(
     "scaleway_s3_get_bucket_encryption",
     {
       title: "Get Scaleway bucket encryption config",
       description:
-        "Read the bucket's S3 default-encryption configuration. IMPORTANT (live-verified 2026-08-18): Scaleway returns an EMPTY config (not an error) for buckets where none was ever set, and Scaleway encrypts all Object Storage at rest platform-side regardless - this config is declarative S3-API-compatibility metadata, not an on/off switch for actual encryption.",
+        "Read the bucket's S3 default-encryption configuration. A fresh bucket returns an EMPTY config (HTTP 200, not an error, unlike AWS which errors) rather than 'AES256 always on' - this is a REAL, toggleable setting, not inert metadata: live-verified 2026-08-18 via the console's Settings tab, put_bucket_encryption/delete_bucket_encryption visibly flip the bucket's 'Encryption type' there between 'Disabled' and 'SSE-ONE encryption with Scaleway Object Native Encryption keys'. (An earlier version of this description claimed the config was declarative-only with no effect - that was wrong, corrected after console cross-validation.)",
       inputSchema: { bucket: bucketField, region: regionField },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -424,7 +424,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
         const rules = (res.ServerSideEncryptionConfiguration?.Rules ?? []).map((r) => ({
           algorithm: r.ApplyServerSideEncryptionByDefault?.SSEAlgorithm ?? null,
         }));
-        return toolJsonResult({ bucket, rules, note: "empty rules = no declarative config set; at-rest encryption is always-on platform-side" }, config.MAX_OUTPUT_CHARS);
+        return toolJsonResult({ bucket, rules, note: "empty rules = encryption 'Disabled' in the console; a rule present = an active SSE default, confirmed to actually toggle the console's Encryption type setting" }, config.MAX_OUTPUT_CHARS);
       }),
   );
 
@@ -433,7 +433,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
     {
       title: "Set Scaleway bucket encryption config",
       description:
-        "Set the bucket's S3 default-encryption declaration (AES256). See get_bucket_encryption: declarative metadata for S3-API compatibility - Scaleway encrypts at rest regardless. Useful mainly for tooling that expects an explicit config to exist.",
+        "Set the bucket's S3 default-encryption configuration (AES256). Live-verified 2026-08-18: this is a real setting, not S3-API-compatibility filler - the console's Settings tab shows 'Encryption type' flip from 'Disabled' to 'SSE-ONE encryption with Scaleway Object Native Encryption keys' immediately after this call.",
       inputSchema: {
         bucket: bucketField,
         region: regionField,
@@ -458,7 +458,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
     {
       title: "Delete Scaleway bucket encryption config",
       description:
-        "Remove the bucket's declarative encryption config. Data stays encrypted at rest (platform-side, always-on) - this only removes the S3-API config object.",
+        "Remove the bucket's default-encryption configuration. Live-verified 2026-08-18: this reverts the console's 'Encryption type' back to 'Disabled' - a real change, not a no-op on inert metadata.",
       inputSchema: { bucket: bucketField, region: regionField },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },

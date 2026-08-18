@@ -134,6 +134,125 @@ if (bucketListAfter.buckets.some((b) => b.name === throwawayBucket)) {
 }
 console.log("verify gone: bucket no longer in list_buckets");
 
+console.log("\n=== WRITE PATH (issue #8): object CRUD lifecycle ===");
+const objBucket = `mcp-smoke-test-objects-${Date.now()}`;
+expectJson(await client.callTool({ name: "scaleway_s3_create_bucket", arguments: { bucket: objBucket } }), "create_bucket (objects)");
+console.log("created bucket:", objBucket);
+
+const textContent = "Hello from scaleway-ops-mcp-server smoke test, issue #8.";
+// Smallest valid transparent PNG (1x1) - a well-known fixture, not sensitive data.
+const pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+const putText = expectJson(
+  await client.callTool({ name: "scaleway_s3_put_object", arguments: { bucket: objBucket, key: "hello.txt", content: textContent, content_type: "text/plain" } }),
+  "put_object (text)",
+);
+console.log("put text object:", putText.key, putText.size_bytes, "bytes");
+
+const putBinary = expectJson(
+  await client.callTool({ name: "scaleway_s3_put_object", arguments: { bucket: objBucket, key: "pixel.png", content: pngBase64, encoding: "base64", content_type: "image/png" } }),
+  "put_object (binary)",
+);
+console.log("put binary object:", putBinary.key, putBinary.size_bytes, "bytes");
+
+const headText = expectJson(await client.callTool({ name: "scaleway_s3_head_object", arguments: { bucket: objBucket, key: "hello.txt" } }), "head_object (text)");
+if (headText.content_type !== "text/plain" || headText.size_bytes !== Buffer.byteLength(textContent, "utf8")) {
+  console.error(`FAILED: head_object metadata mismatch: ${JSON.stringify(headText)}`);
+  process.exit(1);
+}
+console.log("head text object: content_type/size match");
+
+const objList = expectJson(await client.callTool({ name: "scaleway_s3_list_objects", arguments: { bucket: objBucket } }), "list_objects");
+const listedKeys = objList.objects.map((o) => o.key).sort();
+if (listedKeys.join(",") !== "hello.txt,pixel.png") {
+  console.error(`FAILED: list_objects expected [hello.txt, pixel.png], got [${listedKeys.join(", ")}]`);
+  process.exit(1);
+}
+console.log("list_objects: found both keys,", objList.count, "total");
+
+const gotText = expectJson(await client.callTool({ name: "scaleway_s3_get_object", arguments: { bucket: objBucket, key: "hello.txt" } }), "get_object (text)");
+if (gotText.encoding !== "utf8" || gotText.content !== textContent) {
+  console.error(`FAILED: get_object text round-trip mismatch: encoding=${gotText.encoding} content=${JSON.stringify(gotText.content)}`);
+  process.exit(1);
+}
+console.log("get_object text: byte-identical round-trip confirmed (utf8)");
+
+const gotBinary = expectJson(await client.callTool({ name: "scaleway_s3_get_object", arguments: { bucket: objBucket, key: "pixel.png" } }), "get_object (binary)");
+if (gotBinary.encoding !== "base64" || gotBinary.content !== pngBase64) {
+  console.error(`FAILED: get_object binary round-trip mismatch: encoding=${gotBinary.encoding}`);
+  process.exit(1);
+}
+console.log("get_object binary: byte-identical round-trip confirmed (base64)");
+
+const tagsBefore = expectJson(await client.callTool({ name: "scaleway_s3_get_object_tags", arguments: { bucket: objBucket, key: "hello.txt" } }), "get_object_tags (before)");
+console.log("tags before:", JSON.stringify(tagsBefore.tags));
+expectJson(
+  await client.callTool({ name: "scaleway_s3_put_object_tags", arguments: { bucket: objBucket, key: "hello.txt", tags: { env: "smoke-test" } } }),
+  "put_object_tags",
+);
+const tagsAfter = expectJson(await client.callTool({ name: "scaleway_s3_get_object_tags", arguments: { bucket: objBucket, key: "hello.txt" } }), "get_object_tags (after)");
+if (tagsAfter.tags.env !== "smoke-test") {
+  console.error(`FAILED: put_object_tags did not take effect, got ${JSON.stringify(tagsAfter.tags)}`);
+  process.exit(1);
+}
+console.log("object tags: set and read back correctly");
+
+const copied = expectJson(
+  await client.callTool({ name: "scaleway_s3_copy_object", arguments: { source_bucket: objBucket, source_key: "hello.txt", dest_bucket: objBucket, dest_key: "hello-copy.txt" } }),
+  "copy_object",
+);
+console.log("copied:", copied.source_key, "->", copied.dest_key);
+const listAfterCopy = expectJson(await client.callTool({ name: "scaleway_s3_list_objects", arguments: { bucket: objBucket } }), "list_objects (after copy)");
+if (!listAfterCopy.objects.some((o) => o.key === "hello-copy.txt")) {
+  console.error("FAILED: hello-copy.txt missing from list_objects after copy_object");
+  process.exit(1);
+}
+console.log("list_objects: copy confirmed present");
+
+const presigned = expectJson(
+  await client.callTool({ name: "scaleway_s3_generate_presigned_url", arguments: { bucket: objBucket, key: "hello.txt", operation: "get", expires_in_seconds: 300 } }),
+  "generate_presigned_url",
+);
+const presignedFetch = await fetch(presigned.url);
+const presignedBody = await presignedFetch.text();
+if (!presignedFetch.ok || presignedBody !== textContent) {
+  console.error(`FAILED: presigned GET url returned status=${presignedFetch.status} body=${JSON.stringify(presignedBody)}`);
+  process.exit(1);
+}
+console.log("presigned GET url: fetched directly, content matches (verifies signature works, not just that a URL was returned)");
+
+const deletedCopy = expectJson(
+  await client.callTool({ name: "scaleway_s3_delete_object", arguments: { bucket: objBucket, key: "hello-copy.txt", confirm: true } }),
+  "delete_object",
+);
+console.log("deleted single object:", deletedCopy.key);
+
+const batchDeleted = expectJson(
+  await client.callTool({ name: "scaleway_s3_delete_objects", arguments: { bucket: objBucket, keys: ["hello.txt", "pixel.png"], confirm: true } }),
+  "delete_objects",
+);
+if (batchDeleted.errors.length > 0 || batchDeleted.deleted.sort().join(",") !== "hello.txt,pixel.png") {
+  console.error(`FAILED: delete_objects unexpected result: ${JSON.stringify(batchDeleted)}`);
+  process.exit(1);
+}
+console.log("batch-deleted:", batchDeleted.deleted.join(", "));
+
+const listFinal = expectJson(await client.callTool({ name: "scaleway_s3_list_objects", arguments: { bucket: objBucket } }), "list_objects (final)");
+if (listFinal.count !== 0) {
+  console.error(`FAILED: bucket not empty before delete_bucket: ${JSON.stringify(listFinal.objects)}`);
+  process.exit(1);
+}
+console.log("list_objects: bucket empty, ready to delete");
+
+const deletedObjBucket = await client.callTool({ name: "scaleway_s3_delete_bucket", arguments: { bucket: objBucket, confirm: true } });
+console.log("deleted object-test bucket:", text(deletedObjBucket));
+const bucketsAfterObjTest = expectJson(await client.callTool({ name: "scaleway_s3_list_buckets", arguments: {} }), "list_buckets (after object test)");
+if (bucketsAfterObjTest.buckets.some((b) => b.name === objBucket)) {
+  console.error(`FAILED: ${objBucket} still present after delete_bucket`);
+  process.exit(1);
+}
+console.log("verify gone: object-test bucket no longer in list_buckets");
+
 console.log("\n=== AUDIT TRAIL (issue #9): registered audit tools ===");
 const tools = await client.listTools();
 const auditTools = tools.tools.filter((t) => t.name.startsWith("scaleway_audit_")).map((t) => t.name);
@@ -312,4 +431,4 @@ try {
 }
 
 await client.close();
-console.log("\nDONE - full read/write/delete lifecycle verified (applications, API keys, buckets)");
+console.log("\nDONE - full read/write/delete lifecycle verified (applications, API keys, buckets, objects)");

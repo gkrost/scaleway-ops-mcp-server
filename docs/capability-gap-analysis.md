@@ -38,14 +38,14 @@ scope boundary is a deliberate, visible line rather than an implicit one.
 | Bucket policy: get/put/delete | ✅ | ✅ | ✅ |
 | **Bucket lifecycle: create/list/delete buckets** | ✅ | ✅ | ✅ **fixed 2026-08-18** (`scaleway_s3_create_bucket`/`list_buckets`/`delete_bucket`) - confirmed missing the hard way during live re-testing: had to script a raw `@aws-sdk/client-s3` call outside this server just to get a bucket to test bucket-policy tools against |
 | Bucket visibility (public/private) | ✅ | ✅ (ACL) | ✅ **fixed 2026-08-18** (`scaleway_s3_get/set_bucket_visibility`, public confirm-guarded) |
-| Bucket encryption (SSE) | ✅ | ✅ (declarative only) | ✅ **fixed 2026-08-18** (`scaleway_s3_get/put/delete_bucket_encryption`) - live-verified: config is declarative S3-API metadata, at-rest encryption is always-on platform-side |
+| Bucket encryption (SSE) | ✅ | ✅ | ✅ **fixed 2026-08-18** (`scaleway_s3_get/put/delete_bucket_encryption`) - see `docs/gotchas.md` for what this config actually controls |
 | Bucket versioning | ✅ | ✅ | ✅ **fixed 2026-08-18** (`scaleway_s3_get_bucket_versioning`, `set_bucket_versioning` with suspend confirm-guard) |
-| Object lock + retention mode | ✅ | ✅ | ✅ **fixed 2026-08-18** (`scaleway_s3_get_object_lock`, `enable_object_lock`) - enable is one-way (disable rejected at XML-schema level), requires versioning (tool handles), freezes versioning; create-time lock flag silently ignored by Scaleway; per-object retention modes are object-level ops → #8 |
+| Object lock + retention mode | ✅ | ✅ | ✅ **fixed 2026-08-18** (`scaleway_s3_get_object_lock`, `enable_object_lock`) - enable is one-way (disable rejected at XML-schema level), requires versioning (tool handles), freezes versioning; create-time lock flag silently ignored by Scaleway; per-object retention modes are object-level ops (now covered, see below) |
 | Static website hosting | ✅ | ✅ | ✅ **fixed 2026-08-18** (`scaleway_s3_get/put/delete_bucket_website`, put confirm-guarded) |
 | Lifecycle rules (expiration/transition) | ✅ | ✅ | ✅ **fixed 2026-08-18** (`scaleway_s3_get/put/delete_bucket_lifecycle`, put/delete confirm-guarded) |
 | Bucket tags | ✅ | ✅ | ✅ **fixed 2026-08-18** (`scaleway_s3_get/put/delete_bucket_tagging`) |
 | CORS configuration | (console CLI-only per docs) | ✅ | ✅ **fixed 2026-08-18** (`scaleway_s3_get/put/delete_bucket_cors`) |
-| Object-level ops (upload/download/delete/list objects, metadata, tags) | ✅ (Files tab) | ✅ | ❌ in scope as of 2026-08-18 direction change - implementation tracked in [#8](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/8) |
+| Object-level ops (upload/download/delete/list objects, metadata, tags) | ✅ (Files tab) | ✅ | ✅ **fixed 2026-08-18** (`scaleway_s3_put_object`/`get_object`/`list_objects`/`head_object`/`copy_object`/`delete_object`/`delete_objects`/`get_object_tags`/`put_object_tags`/`generate_presigned_url`) - full CRUD, live-verified via MCP only (create bucket → put text+binary → head → list → get byte-identical round-trip → tags → copy → presigned-URL fetch → batch delete → delete → bucket gone), see [#8](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/8) |
 | Bucket metrics / access logs | ✅ | ❌ (S3 API: `NotImplemented`, live-verified 2026-08-18) | ❌ no tools possible on this API surface - logging/metrics live in Cockpit/console, not the S3 API |
 
 ## Audit Trail
@@ -77,22 +77,31 @@ this session's live re-test - **both fixed and live-verified 2026-08-18**:
    test the bucket-policy tools against. Confirmed live: create → appears in list → delete → gone
    from list.
 
+Object-level operations, originally listed here as out of scope ("this server never touches object
+data"), were also implemented 2026-08-18 - direction changed in
+[#8](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/8) once the same
+friction that motivated the bucket-lifecycle tools (dropping out of MCP to a raw
+`@aws-sdk/client-s3` script) turned out to apply to object data too. Presigned URLs and object tags
+(originally P1/"implement or defer with rationale") were both implemented rather than deferred - the
+extra surface area was small given `s3Client.ts`'s existing SigV4 path, and both are exercised by
+`scripts/smoke-test.mjs`.
+
 Everything else in the tables above is a legitimate, deliberate scope boundary (Users/Groups/SSH
-Keys/SAML/SCIM, bucket data-plane and settings) - not a gap so much as a confirmation the README's
-stated scope is accurate. Audit Trail's alerting/export machinery, originally listed here as out of
-scope, was subsequently implemented (2026-08-18) - see the Audit Trail table above for what works
-and what's blocked on Scaleway's own API. Each remaining gap is tracked as its own
+Keys/SAML/SCIM, bucket *configuration* - visibility/encryption/versioning/lifecycle-rules/website/
+metrics, as opposed to bucket *data* which #8 now covers) - not a gap so much as a confirmation the
+README's stated scope is accurate. Audit Trail's alerting/export machinery, originally listed here
+as out of scope, was subsequently implemented (2026-08-18) - see the Audit Trail table above for
+what works and what's blocked on Scaleway's own API. Each remaining gap is tracked as its own
 GitHub issue (labeled `scaleway`) rather than left implicit:
 [#3](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/3) policy clone,
 [#4](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/4) Users,
 [#5](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/5) Groups,
 [#6](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/6) SSH Keys/Quotas/JWTs/SAML/SCIM,
-[#8](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/8) object-level operations
-(now in scope, implementation pending),
 [#9](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/9) Audit Trail's broader surface.
-[#7](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/7) bucket configuration was
-implemented 2026-08-18 (see the Object Storage table above - only logging/metrics remain impossible:
-Scaleway's S3 API does not implement them).
+[#7](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/7) bucket configuration and
+[#8](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/8) object-level operations
+were both implemented 2026-08-18 (see the Object Storage table above - only logging/metrics remain
+impossible: Scaleway's S3 API does not implement them).
 
 ## Is this server redundant with something official/established? (checked 2026-08-18)
 
