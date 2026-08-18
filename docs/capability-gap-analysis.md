@@ -25,11 +25,13 @@ scope boundary is a deliberate, visible line rather than an implicit one.
 | Permission sets: list | ✅ | ✅ | ✅ |
 | **Users** (human members): list/create/delete/update, lock/unlock, MFA, password/username | ✅ | ✅ | ✅ **fixed 2026-08-18** (issue #4: `list/get/create/update/delete_user`, `lock/unlock_user`, `update_user_password/username`, `delete_user_mfa_otp`, `list_user_grace_periods`) - reads live-verified; mutation happy-paths negative-test-only (no disposable mailbox); create/invite semantics unverified (see gotchas) |
 | **Groups**: list/create/get/update/delete, add/remove members | ✅ | ✅ | ❌ out of scope (`create_policy`/`set_policy_rules` accept a `group_id` principal, but nothing here creates or manages the group itself) - tracked in [#5](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/5) |
-| SSH Keys | ✅ | ✅ | ❌ out of scope (unrelated to this server's IAM/storage focus) - tracked in [#6](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/6) |
-| Quotas: list/get | ✅ (shown contextually) | ✅ | ❌ out of scope, low value here - tracked in [#6](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/6) |
-| JWTs: list/get/delete | ❌ (not really a console feature) | ✅ | ❌ out of scope, niche - tracked in [#6](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/6) |
+| SSH Keys: list/get/create/update/delete | ✅ | ✅ | ✅ **fixed 2026-08-18** (issue #6: `scaleway_iam_list/get/create/update/delete_ssh_key`) - full CRUD live-verified. Project-scoped (`SSHKeysFullAccess`), not org-scoped like this server's other IAM tools - see gotchas. Client-side rejects anything that looks like a private key |
+| Quotas: list/get | ✅ (shown contextually) | ❓ | ❌ **could not locate a real endpoint** (issue #6) - the issue's own claimed `/quotas` path 404s, as do 10+ other guesses across IAM/Account APIs and versions. No tool written; deferred with full probe evidence in gotchas.md rather than shipping a speculative dead endpoint |
+| JWTs: list/get/delete | ❌ (not really a console feature) | ✅ | ⚠️ **partially fixed 2026-08-18** (issue #6: `scaleway_iam_list/get/delete_jwt`) - real path is `/jwts` (plural) with `audience_id`, corrected from the issue's `/jwt` spec; `list` structurally 403s for this Application/API-key credential regardless of permissions (resource `self_jwt` - likely session-only), documented and left as a surfaced-error path, not a bug |
 | IAM Logs (resource-lifecycle log, distinct from Audit Trail) | ✅ (Logs tab) | ✅ | ❌ not covered - likely redundant with `scaleway_audit_list_events` for this server's purposes, but worth knowing it's a separate endpoint |
-| SAML / SCIM / Security Settings (org-wide SSO, provisioning, auth policy) | ✅ | ✅ | ❌ out of scope - enterprise SSO/provisioning, unrelated to this server's credential-provisioning use case - tracked in [#6](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/6) |
+| SAML (org-wide SSO) | ✅ | ✅ | ✅ **fixed 2026-08-18** (issue #6: `scaleway_iam_get/enable/update/disable_saml`, `list/add/get/delete_saml_certificate`) - real path is org-nested (`/organizations/{id}/saml`), corrected from the issue's flat `/saml` spec; disable is a separate top-level `DELETE /saml/{id}` route. GET live-verified (not-configured state); mutations guard-tested only - **never called live**, see the incident in gotchas.md |
+| SCIM (provisioning) | ✅ | ✅ | ✅ **fixed 2026-08-18** (issue #6: `scaleway_iam_get/enable/disable_scim`, `list/create/delete_scim_token`) - same org-nesting correction and same never-called-live caution as SAML, see gotchas.md |
+| Security Settings (org-wide auth policy) | ✅ | ✅ | ✅ **fixed 2026-08-18** (issue #6: `scaleway_iam_get/update_security_settings`) - live-verified both directions, including confirming a confirm-only no-op PATCH changes nothing (this one genuinely follows safe "only passed fields change" semantics, unlike SAML/SCIM's enable) |
 
 ## Object Storage
 
@@ -86,16 +88,18 @@ friction that motivated the bucket-lifecycle tools (dropping out of MCP to a raw
 extra surface area was small given `s3Client.ts`'s existing SigV4 path, and both are exercised by
 `scripts/smoke-test.mjs`.
 
-Everything else in the tables above is a legitimate, deliberate scope boundary (Groups/SSH
-Keys/SAML/SCIM) - not a gap so much as a confirmation the
-README's stated scope is accurate. Users (formerly here) was implemented 2026-08-18 (see the IAM
-table above), as were Audit Trail's alerting/export machinery and bucket configuration - see those
-tables for what works and what's blocked on Scaleway's own API. Each remaining gap is tracked as its own
+SSH Keys, JWTs, SAML, SCIM, and Security Settings (formerly listed here as out of scope) were
+implemented 2026-08-18 in [#6](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/6)
+(see the IAM table above) - the one item from that issue NOT implemented is Quotas, deferred because
+no real API endpoint could be found despite extensive probing (see gotchas.md). Users (formerly here)
+was implemented 2026-08-18 (see the IAM table above), as were Audit Trail's alerting/export machinery
+and bucket configuration - see those tables for what works and what's blocked on Scaleway's own API.
+Groups remains the one genuine, deliberate scope boundary left in IAM - not a gap so much as a
+confirmation the README's stated scope is accurate there. Each remaining gap is tracked as its own
 GitHub issue (labeled `scaleway`) rather than left implicit:
 [#3](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/3) policy clone,
 [#4](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/4) Users,
 [#5](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/5) Groups,
-[#6](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/6) SSH Keys/Quotas/JWTs/SAML/SCIM,
 [#9](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/9) Audit Trail's broader surface.
 [#7](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/7) bucket configuration and
 [#8](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/8) object-level operations

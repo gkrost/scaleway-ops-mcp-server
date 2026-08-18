@@ -259,3 +259,85 @@ Live-probed 2026-08-18 (read-only + bogus-id error shapes; no disposable mailbox
 - All user mutations return clean `404 resource: user` on bogus ids - surfaced verbatim.
 - The server credential needed `IAMUserManager` added to its existing org-scoped IAM rule (granted via this server's own `set_policy_rules`, 2026-08-18) - `GET /users` 403s with only IAMApplicationManager.
 - `mfa` on the user object is a plain boolean; MFA OTP enrollment (create/validate) is deliberately not a tool - validation needs the person's authenticator code, and a created-but-unvalidated factor leaves MFA half-configured.
+
+## IAM SSH Keys / JWTs / SAML / SCIM / Security Settings: five wrong paths, one live incident (issue #6)
+
+Live-probed 2026-08-18. The issue's own API-surface table (itself sourced from Scaleway's docs page,
+not a live call) turned out wrong for four of six workstreams - re-confirming the standing lesson
+from the `/policies/{id}/rules` entry above: treat a doc-sourced path as a hypothesis, not a fact,
+until an actual call confirms it.
+
+- **SSH Keys are `projects`-scope, not `organization`-scope**, unlike every other IAM tool in this
+  server. `GET /ssh-keys?organization_id=...` 403s; the working call is
+  `GET /ssh-keys?project_id=...`, and the permission sets are `SSHKeysReadOnly`/`SSHKeysFullAccess`
+  with `scope_type: "projects"` - granted as a **project**-scoped policy rule, not folded into the
+  existing org-scoped rule. Live-verified full CRUD (create -> get -> list -> rename -> delete).
+- **JWTs live at `/jwts` (plural), not `/jwt`, and take `audience_id` (a user_id), not
+  `organization_id`.** Even with the credential's policy extended to full `IAMManager`, `list`/`get`
+  still 403 with resource `self_jwt` for every `audience_id` tried (including the org owner's own
+  id) - the action name strongly suggests this surface is scoped to a session's OWN JWTs, which an
+  Application/API-key credential structurally never has (JWTs are browser/console login tokens; an
+  API key doesn't do interactive login). Implemented per the corrected path, left live-unverified
+  beyond the 403 - may be permanently inaccessible from this server's auth model regardless of
+  permissions. `GET`/`DELETE /jwts/{id}` (singular-item paths) ARE plain, non-`self`-scoped routes
+  (confirmed via bogus-id 404 shape), so `get_jwt`/`delete_jwt` may work even though `list_jwts`
+  doesn't - untested live, since there was nothing valid to fetch.
+- **SAML, SCIM, and Security Settings are org-nested (`/organizations/{id}/saml` etc.), not flat
+  (`/saml`).** Security Settings' path otherwise matched the issue spec (`GET`/`PATCH
+  .../security-settings`, live-verified both ways - see the incident-avoidance note below). SAML and
+  SCIM's own base paths matched once org-nested, but their **disable** endpoint does NOT follow the
+  same nesting: `DELETE /organizations/{id}/saml` and `.../scim` both **405 Method Not Allowed** -
+  the real disable is a **top-level, resource-id-scoped** `DELETE /saml/{saml_id}` /
+  `DELETE /scim/{scim_id}`, confirmed live (see incident below). `scaleway_iam_disable_saml`/
+  `disable_scim` therefore GET the config first to resolve its id, then DELETE that top-level path.
+  Certificates/tokens sub-resources follow the SAME nested nesting as the parent, confirmed via GET:
+  `/saml/{saml_id}/certificates`, `/scim/{scim_id}/tokens` - but the further single-item paths
+  (`.../certificates/{certificate_id}`, `.../tokens/{token_id}`) could NOT be confirmed without a
+  live SAML/SCIM config to test against (deliberately not recreated - see below), so
+  `get_saml_certificate`/`delete_saml_certificate`/`delete_scim_token` follow the same nesting
+  convention as a best guess and say so in their tool descriptions.
+- **Quotas could not be located anywhere in the public API.** `GET /quotas`, `/quotas/{name}` (the
+  issue's own claimed path) 404s. So do 10+ other guesses tried: IAM v1alpha1 and Account API v2 /
+  v2alpha1 / v3, organization-scoped and project-scoped, flat and nested, including
+  `GET /account/v3/organizations/{id}` (a real, 200-returning route) which does NOT include a
+  `quotas` field despite `OrganizationReadOnly`'s own permission-set description explicitly saying
+  "Read access to the Organization's general information (e.g. Organization ID and quotas)". No
+  `quotas.ts` was written for this issue - deferred with this evidence rather than shipping a
+  speculative dead endpoint. If a real path surfaces later (a differently-versioned API, a
+  console-only feature with no public endpoint, or something requiring a permission this
+  credential still lacks), re-open as its own follow-up.
+
+### Incident: an empty POST body to `/organizations/{id}/saml` and `.../scim` does NOT validation-error - it silently ENABLES the feature live
+
+Every other IAM write endpoint in this API 400s cleanly on a missing required field (see the `users`
+section above: "missing-type probe -> 400"). That pattern was relied on here too, to learn SAML/
+SCIM's required fields safely with an empty `{}` body - the same technique used throughout this
+file. Instead, `POST /organizations/{id}/saml` with `{}` returned **200**, creating a real SAML
+config (`status: "missing_certificate"`) on the live Organization, and `POST .../scim` with `{}`
+likewise returned **200**, fully enabling SCIM. Filed as a Scaleway bug report:
+[issue #6 comment](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/6#issuecomment-5329691504).
+
+Neither was immediately exploitable - `login_saml_enabled` on the Organization object never flipped
+to `true` (SAML stayed in `missing_certificate`, unable to validate any assertion), and SCIM had no
+token yet, so nothing external could provision through it - but it was still an unintended,
+unauthorized change to production org-wide auth configuration from what should have been a read-safe
+probe. Reverted immediately (`DELETE /saml/{id}`, `DELETE /scim/{id}` - see the disable-path entry
+above, discovered *from* fixing this), confirmed via `GET` back to `404 not_found` on both, and
+`login_saml_enabled` false throughout.
+
+**Consequence for this server's tools:** `enable_saml`/`update_saml` require `entity_id` and
+`single_sign_on_url` as non-optional zod strings specifically so this server can never send a
+near-empty body the way the probe accidentally did. `add_saml_certificate`/`create_scim_token`'s
+exact field shapes were deliberately never live-tested while building this issue, to avoid a repeat -
+their tool descriptions say so explicitly. `enable_scim` is the one exception: it now has *confirmed*
+live evidence that the endpoint genuinely takes no fields at all, so its empty-body call is
+intentional and confirm-gated, not an accident.
+
+**Consequence for how this file's own established technique gets used going forward:** the
+"empty-body probe" pattern is safe *only* when there's independent evidence the target endpoint
+validates-then-acts rather than acts-with-defaults - which was true for every prior use in this repo
+(IAM Users, Policies, API keys) but is not universal. Before relying on it again, consider whether
+the call is expected to be a `create`-shaped action (validates) or an `enable`/`toggle`-shaped one
+(may just apply defaults) - the latter deserves either a `GET`-only cross-check first (as was
+retroactively used to confirm the disable path here) or explicit user sign-off before attempting on
+a live account, same as this issue's own protocol already required for the *known* R3 mutations.

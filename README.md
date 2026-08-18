@@ -85,6 +85,21 @@ Via Claude Code / any MCP client, as a stdio server:
 - `scaleway_iam_update_user_password` (admin-set reset, confirm-guarded), `scaleway_iam_update_user_username` (confirm-guarded)
 - `scaleway_iam_delete_user_mfa_otp` (confirm-guarded, security-weakening), `scaleway_iam_list_user_grace_periods`
 
+**IAM SSH Keys** (issue #6; `projects`-scope permission, unlike this server's other IAM tools - see gotchas)
+- `scaleway_iam_list_ssh_keys`, `scaleway_iam_get_ssh_key`, `scaleway_iam_create_ssh_key` (public keys only - rejects anything that looks like a private key), `scaleway_iam_update_ssh_key` (rename only), `scaleway_iam_delete_ssh_key` (confirm-guarded)
+
+**IAM JWTs** (issue #6; browser/console session tokens, not API keys)
+- `scaleway_iam_list_jwts`, `scaleway_iam_get_jwt`, `scaleway_iam_delete_jwt` (confirm-guarded) - `list` structurally 403s for an Application/API-key credential regardless of permissions (see gotchas); implemented per the corrected `/jwts` path in case `get`/`delete` fare better.
+
+**IAM SAML SSO** (issue #6; org-wide - see gotchas for a live incident this was found from)
+- `scaleway_iam_get_saml_config`, `scaleway_iam_enable_saml` / `update_saml` / `disable_saml` (all confirm-guarded, org-wide blast radius), `scaleway_iam_list/add/get/delete_saml_certificate` (add/get/delete confirm-guarded where destructive; single-certificate path unverified, see gotchas)
+
+**IAM SCIM provisioning** (issue #6; same org-wide caution as SAML)
+- `scaleway_iam_get_scim_config`, `scaleway_iam_enable_scim` / `disable_scim` (confirm-guarded), `scaleway_iam_list/create/delete_scim_token` (create/delete confirm-guarded; token secret returned once, like an API key)
+
+**IAM Security Settings** (issue #6; org-wide auth policy - live-verified both directions)
+- `scaleway_iam_get_security_settings`, `scaleway_iam_update_security_settings` (confirm-guarded; only passed fields change)
+
 **IAM Permission sets**
 - `scaleway_iam_list_permission_sets` - call this before creating/attaching a policy; see `docs/gotchas.md`.
 
@@ -130,12 +145,13 @@ Via Claude Code / any MCP client, as a stdio server:
 ## Scope
 
 Deliberately narrow: IAM identity/policy management (Applications and human Users; Groups pending #5),
-Bucket Policies, bucket lifecycle and
+SSH Keys, JWTs, SAML/SCIM/Security Settings, Bucket Policies, bucket lifecycle and
 configuration, Object Storage object CRUD (put/get/list/head/copy/delete/tags/presigned URLs,
 single-part only), and Audit Trail (event queries, alert rules, export jobs), because that's what
 actually caused friction so far. Not a general Scaleway API wrapper - no compute, databases,
 containers, no multipart upload, no bucket logging/metrics (Scaleway's S3 API doesn't implement
-them). Extend it the same way if/when those become a recurring need too.
+them), no Quotas (no real endpoint could be found - see docs/gotchas.md). Extend it the same way
+if/when those become a recurring need too.
 
 ## Dev
 
