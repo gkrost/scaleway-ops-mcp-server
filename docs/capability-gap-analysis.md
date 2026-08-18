@@ -23,7 +23,7 @@ scope boundary is a deliberate, visible line rather than an implicit one.
 | Policies: **clone/duplicate** | ✅ (UI action) | ✅ | ✅ **fixed 2026-08-18** (`scaleway_iam_clone_policy`) - atomic copy of rules/principal/tags; name is duplicated so rename after if needed - tracked in [#3](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/3) |
 | Policy rules: list/set (full-replace) | ✅ | ✅ | ✅ |
 | Permission sets: list | ✅ | ✅ | ✅ |
-| **Users** (human members): list/create/delete/update, lock/unlock, MFA, password/username | ✅ | ✅ | ❌ out of scope (this server manages Applications, i.e. non-human identities, only) - tracked in [#4](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/4) |
+| **Users** (human members): list/create/delete/update, lock/unlock, MFA, password/username | ✅ | ✅ | ✅ **fixed 2026-08-18** (issue #4: `list/get/create/update/delete_user`, `lock/unlock_user`, `update_user_password/username`, `delete_user_mfa_otp`, `list_user_grace_periods`) - reads live-verified; mutation happy-paths negative-test-only (no disposable mailbox); create/invite semantics unverified (see gotchas) |
 | **Groups**: list/create/get/update/delete, add/remove members | ✅ | ✅ | ❌ out of scope (`create_policy`/`set_policy_rules` accept a `group_id` principal, but nothing here creates or manages the group itself) - tracked in [#5](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/5) |
 | SSH Keys | ✅ | ✅ | ❌ out of scope (unrelated to this server's IAM/storage focus) - tracked in [#6](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/6) |
 | Quotas: list/get | ✅ (shown contextually) | ✅ | ❌ out of scope, low value here - tracked in [#6](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/6) |
@@ -86,12 +86,11 @@ friction that motivated the bucket-lifecycle tools (dropping out of MCP to a raw
 extra surface area was small given `s3Client.ts`'s existing SigV4 path, and both are exercised by
 `scripts/smoke-test.mjs`.
 
-Everything else in the tables above is a legitimate, deliberate scope boundary (Users/Groups/SSH
-Keys/SAML/SCIM, bucket *configuration* - visibility/encryption/versioning/lifecycle-rules/website/
-metrics, as opposed to bucket *data* which #8 now covers) - not a gap so much as a confirmation the
-README's stated scope is accurate. Audit Trail's alerting/export machinery, originally listed here
-as out of scope, was subsequently implemented (2026-08-18) - see the Audit Trail table above for
-what works and what's blocked on Scaleway's own API. Each remaining gap is tracked as its own
+Everything else in the tables above is a legitimate, deliberate scope boundary (Groups/SSH
+Keys/SAML/SCIM) - not a gap so much as a confirmation the
+README's stated scope is accurate. Users (formerly here) was implemented 2026-08-18 (see the IAM
+table above), as were Audit Trail's alerting/export machinery and bucket configuration - see those
+tables for what works and what's blocked on Scaleway's own API. Each remaining gap is tracked as its own
 GitHub issue (labeled `scaleway`) rather than left implicit:
 [#3](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/3) policy clone,
 [#4](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/4) Users,

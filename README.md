@@ -77,6 +77,14 @@ Via Claude Code / any MCP client, as a stdio server:
 **IAM Policy rules** (separate endpoint from the Policy object itself - see `docs/gotchas.md`)
 - `scaleway_iam_list_policy_rules`, `scaleway_iam_set_policy_rules` (atomic full-replace `PUT`, no delete+recreate lockout risk)
 
+**IAM Users** (human identities, issue #4; invite semantics unverified - see gotchas)
+- `scaleway_iam_list_users`, `scaleway_iam_get_user`
+- `scaleway_iam_create_user` (confirm-guarded; sends a real invitation email - semantics unverified without a disposable mailbox)
+- `scaleway_iam_update_user` (profile fields), `scaleway_iam_delete_user` (confirm + owner-refused + guest-scoped API errors surfaced)
+- `scaleway_iam_lock_user` / `scaleway_iam_unlock_user` (lock is confirm-guarded - acts on a person)
+- `scaleway_iam_update_user_password` (admin-set reset, confirm-guarded), `scaleway_iam_update_user_username` (confirm-guarded)
+- `scaleway_iam_delete_user_mfa_otp` (confirm-guarded, security-weakening), `scaleway_iam_list_user_grace_periods`
+
 **IAM Permission sets**
 - `scaleway_iam_list_permission_sets` - call this before creating/attaching a policy; see `docs/gotchas.md`.
 
@@ -121,7 +129,8 @@ Via Claude Code / any MCP client, as a stdio server:
 
 ## Scope
 
-Deliberately narrow: IAM identity/policy management, Bucket Policies, bucket lifecycle and
+Deliberately narrow: IAM identity/policy management (Applications and human Users; Groups pending #5),
+Bucket Policies, bucket lifecycle and
 configuration, Object Storage object CRUD (put/get/list/head/copy/delete/tags/presigned URLs,
 single-part only), and Audit Trail (event queries, alert rules, export jobs), because that's what
 actually caused friction so far. Not a general Scaleway API wrapper - no compute, databases,

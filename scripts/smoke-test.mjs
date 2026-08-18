@@ -430,5 +430,71 @@ try {
   console.log("verify gone: config bucket no longer in list_buckets");
 }
 
+console.log("\n=== IAM USERS (issue #4): path-2 verification - reads live, mutations negative-only (no disposable mailbox) ===");
+const usersList = expectJson(await client.callTool({ name: "scaleway_iam_list_users", arguments: {} }), "list_users");
+if (usersList.total_count < 1) { console.error("FAILED: expected at least the org owner in list_users"); process.exit(1); }
+const owner = usersList.users.find((u) => u.type === "owner");
+console.log(`list_users: ${usersList.total_count} user(s), owner present: ${!!owner} (id ${owner?.id ?? "-"}, mfa: ${owner?.mfa_enabled})`);
+
+const gotUser = expectJson(await client.callTool({ name: "scaleway_iam_get_user", arguments: { user_id: owner.id } }), "get_user");
+if (gotUser.id !== owner.id || gotUser.type !== "owner") { console.error("FAILED: get_user mismatch"); process.exit(1); }
+console.log("get_user: owner echoed (status:", gotUser.status + ", locked:", gotUser.locked + ")");
+
+const bogusId = "00000000-0000-4000-8000-000000000000";
+
+// Guard negative-tests: missing confirm rejected BEFORE any API call
+for (const [name, args, label] of [
+  ["scaleway_iam_create_user", { email: "nobody-invalid@example.invalid", type: "guest" }, "create without confirm"],
+  ["scaleway_iam_delete_user", { user_id: bogusId }, "delete without confirm"],
+  ["scaleway_iam_lock_user", { user_id: bogusId }, "lock without confirm"],
+  ["scaleway_iam_update_user_password", { user_id: bogusId, password: "Xy9!mQ2#kL7%pR4z" }, "password without confirm"],
+  ["scaleway_iam_update_user_username", { user_id: bogusId, new_username: "probe_xyz" }, "username without confirm"],
+  ["scaleway_iam_delete_user_mfa_otp", { user_id: bogusId }, "mfa delete without confirm"],
+]) {
+  const res = await client.callTool({ name, arguments: args });
+  if (!res.isError) { console.error(`FAILED at "${label}": expected schema rejection, got success`); process.exit(1); }
+  console.log(`guard ok (${label}): rejected`);
+}
+
+// Owner-refusal belt-and-braces: delete on the real OWNER must be refused by the tool itself
+const ownerDel = await client.callTool({ name: "scaleway_iam_delete_user", arguments: { user_id: owner.id, confirm: true } });
+if (!ownerDel.isError || !text(ownerDel).includes("OWNER")) { console.error("FAILED: owner delete not refused:", text(ownerDel)); process.exit(1); }
+console.log("guard ok (owner delete refused):", text(ownerDel).slice(0, 90));
+
+// Bogus-id mutations with confirm: API 404 shapes surfaced verbatim, no real user touched
+for (const [name, args, label] of [
+  ["scaleway_iam_update_user", { user_id: bogusId, tags: ["probe"] }, "update bogus id"],
+  ["scaleway_iam_delete_user", { user_id: bogusId, confirm: true }, "delete bogus id"],
+  ["scaleway_iam_lock_user", { user_id: bogusId, confirm: true }, "lock bogus id"],
+  ["scaleway_iam_unlock_user", { user_id: bogusId }, "unlock bogus id"],
+  ["scaleway_iam_update_user_username", { user_id: bogusId, new_username: "probe_xyz", confirm: true }, "username bogus id"],
+  ["scaleway_iam_delete_user_mfa_otp", { user_id: bogusId, confirm: true }, "mfa delete bogus id"],
+  ["scaleway_iam_list_user_grace_periods", { user_id: bogusId }, "grace periods bogus id"],
+]) {
+  const res = await client.callTool({ name, arguments: args });
+  if (!res.isError) { console.error(`FAILED at "${label}": expected API error, got success`); process.exit(1); }
+  console.log(`api err ok (${label}): ${text(res).slice(0, 100)}`);
+}
+
+// Regression guard: update_user_password must actually send the password in the request body.
+// A bogus id with a valid password must fail with the API's "resource: user" 404 - NOT a "password
+// required"-style validation error, which is what a body-omission bug (previously shipped) produces
+// instead, since the missing field gets caught before the id is ever looked up.
+const bogusPassword = await client.callTool({
+  name: "scaleway_iam_update_user_password",
+  arguments: { user_id: bogusId, password: "Xy9!mQ2#kL7%pR4z", confirm: true },
+});
+if (!bogusPassword.isError || !text(bogusPassword).includes("resource is not found")) {
+  console.error(`FAILED: update_user_password did not surface the expected bogus-id 404 (password body likely not sent): ${text(bogusPassword)}`);
+  process.exit(1);
+}
+console.log("api err ok (password bogus id): password reached the API and the id lookup 404'd, as expected");
+
+// Create negative-only: invalid email must be rejected by the API (validation fires before any email is sent)
+const badCreate = await client.callTool({ name: "scaleway_iam_create_user", arguments: { email: "not-an-email", type: "guest", confirm: true } });
+if (!badCreate.isError || !text(badCreate).includes("email")) { console.error("FAILED: invalid-email create not rejected as expected:", text(badCreate)); process.exit(1); }
+console.log("api err ok (create invalid email rejected):", text(badCreate).slice(0, 110));
+console.log("users: path-2 verification complete - reads live-verified, mutations guard+error verified, zero writes to real humans");
+
 await client.close();
 console.log("\nDONE - full read/write/delete lifecycle verified (applications, API keys, buckets, objects)");
