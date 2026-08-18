@@ -34,6 +34,39 @@ recognize `s3:HeadObject` - submitting it fails validation with `"Policy has inv
 `HeadObject`/`HeadBucket` calls are authorized via `s3:GetObject`/`s3:ListBucket` respectively,
 matching AWS's own actual IAM semantics (AWS doesn't have a separate `HeadObject` action either).
 
+## Bucket-policy `Resource` entries are bare bucket names, not ARNs - and `application_id` Principals need `Version: "2023-04-17"`
+
+Confirmed empirically 2026-08-18, live-retesting every tool: despite the AWS-compatible S3 API/SDK
+everywhere else in this server, a bucket policy's `Resource` array must be bare names
+(`"my-bucket"`, `"my-bucket/*"`), **not** ARNs. `"arn:aws:s3:::my-bucket"` and
+`"arn:scw:s3:::my-bucket"` both fail with `"Policy has invalid resource"` - there is no ARN prefix
+at all for this field. Separately, an `application_id` `Principal` (`{"SCW":"application_id:<uuid>"}`)
+requires `"Version": "2023-04-17"` in the document; the AWS-standard `"2012-10-17"` fails with
+`"application_id Principal is supported in the bucket-policy versions 2023-04-17"` before the
+`Resource` field is even validated. Working example:
+
+```json
+{
+  "Version": "2023-04-17",
+  "Statement": [
+    {
+      "Sid": "Example",
+      "Effect": "Allow",
+      "Principal": { "SCW": "application_id:<uuid>" },
+      "Action": ["s3:GetObject", "s3:ListBucket"],
+      "Resource": ["my-bucket", "my-bucket/*"]
+    }
+  ]
+}
+```
+
+## Tags reject `:` as a separator
+
+`PATCH .../applications/{id}` and `PATCH .../policies/{id}` validate each tag against
+`^[a-zA-Z0-9._\-/=+@ ]+$` - a colon-separated tag like `"env:prod"` fails with
+`"tags[0]: value does not match regex pattern..."`. Confirmed empirically 2026-08-18. Use `=`
+instead (`"env=prod"`), which this server's own tool descriptions now recommend.
+
 ## `GET /iam/v1alpha1/policies?application_id=X` silently ignores the filter
 
 Confirmed by direct comparison: the same query with and without `application_id` returned the

@@ -39,8 +39,10 @@ const updateSchema = {
     .max(10)
     .optional()
     .describe(
-      "Structured metadata, max 10. Locked vocabulary in this org: 'env:{prod|dev|local|ci|shared}', " +
-        "'access:{ro|rw|admin|full}', 'owner:<team-or-tool>', 'issue:<n>', 'managed-by:{mcp|manual|terraform}'. " +
+      "Structured metadata, max 10. Locked vocabulary in this org: 'env={prod|dev|local|ci|shared}', " +
+        "'access={ro|rw|admin|full}', 'owner=<team-or-tool>', 'issue=<n>', 'managed-by={mcp|manual|terraform}'. " +
+        "Use '=' as the separator, not ':' - Scaleway's tags API rejects colons " +
+        "(validated against ^[a-zA-Z0-9._\\-/=+@ ]+$, confirmed empirically 2026-08-18). " +
         "REPLACES the full tag list (same semantics as scaleway_s3_put_bucket_policy replacing the whole policy " +
         "document) - pass the complete set you want, not just the ones you're adding.",
     ),

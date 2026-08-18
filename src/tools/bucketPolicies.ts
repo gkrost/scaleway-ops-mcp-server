@@ -30,9 +30,15 @@ const putSchema = {
         "scaleway_s3_get_bucket_policy first, add your statement to its Statement array, then PUT the merged " +
         "document. Known gotcha: 's3:HeadObject' is NOT a valid action here (HeadObject/HeadBucket calls are " +
         "authorized via 's3:GetObject'/'s3:ListBucket' respectively) - submitting it fails with 'Policy has " +
-        "invalid action'. Also remember an IAM Policy (scaleway_iam_create_policy) granting the SAME principal " +
-        "project-wide access to the relevant permission sets is required in addition to this bucket policy - a " +
-        "Bucket Policy alone is not sufficient on Scaleway.",
+        "invalid action'. Despite the AWS-compatible API/SDK, 'Resource' entries are BARE bucket names, NOT ARNs - " +
+        "use 'my-bucket' and 'my-bucket/*', not 'arn:aws:s3:::my-bucket' (submitting an ARN fails with 'Policy has " +
+        "invalid resource', confirmed empirically 2026-08-18). To grant an application_id Principal, 'Version' " +
+        "must be '2023-04-17' (not AWS's '2012-10-17') - example: {\"Version\":\"2023-04-17\",\"Statement\":[{" +
+        "\"Sid\":\"Example\",\"Effect\":\"Allow\",\"Principal\":{\"SCW\":\"application_id:<uuid>\"}," +
+        "\"Action\":[\"s3:GetObject\",\"s3:ListBucket\"],\"Resource\":[\"my-bucket\",\"my-bucket/*\"]}]}. Also " +
+        "remember an IAM Policy (scaleway_iam_create_policy) granting the SAME principal project-wide access to " +
+        "the relevant permission sets is required in addition to this bucket policy - a Bucket Policy alone is " +
+        "not sufficient on Scaleway.",
     ),
 };
 
