@@ -20,7 +20,7 @@ scope boundary is a deliberate, visible line rather than an implicit one.
 | API keys: create/list/delete | ✅ | ✅ | ✅ |
 | **API keys: update** (description/expiry without rotating the secret) | ✅ | ✅ (`UPDATE`) | ✅ **fixed 2026-08-18** (`scaleway_iam_update_api_key`) |
 | Policies: create/get/list/update/delete | ✅ | ✅ | ✅ |
-| Policies: **clone/duplicate** | ✅ (UI action) | ✅ | ❌ missing (achievable manually: `get` + re-`create`) - tracked in [#3](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/3) |
+| Policies: **clone/duplicate** | ✅ (UI action) | ✅ | ✅ **fixed 2026-08-18** (`scaleway_iam_clone_policy`) - atomic copy of rules/principal/tags; name is duplicated so rename after if needed - tracked in [#3](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/3) |
 | Policy rules: list/set (full-replace) | ✅ | ✅ | ✅ |
 | Permission sets: list | ✅ | ✅ | ✅ |
 | **Users** (human members): list/create/delete/update, lock/unlock, MFA, password/username | ✅ | ✅ | ❌ out of scope (this server manages Applications, i.e. non-human identities, only) - tracked in [#4](https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues/4) |
