@@ -98,9 +98,13 @@ export function registerAuditTrailExports(server: McpServer, config: Config) {
       title: "Create a Scaleway Audit Trail export job",
       description:
         "Create an export job shipping Audit Trail events to an Object Storage bucket (S3 destination). The " +
-          "bucket must already exist and be writable - create it first (e.g. scaleway_s3_create_bucket). Scaleway " +
-          "does not document here how promptly the first run happens or its exact cadence; check " +
-          "last_run_at / last_status via scaleway_audit_list_export_jobs afterwards. " +
+          "bucket must already exist and be writable - create it first (e.g. scaleway_s3_create_bucket). " +
+          "Live-verified 2026-08-18: creation triggers an IMMEDIATE backfill, not just a future cadence - a fresh " +
+          "job wrote ~6 days of past daily log objects (one JSON file per day, e.g. '2026/07/12/logs_*.json') into " +
+          "the bucket within seconds of creation. scaleway_audit_delete_export_job does not delete these - if you " +
+          "created a bucket just to test this, you'll need to empty it (object-level operations are out of scope " +
+          "for this server) before scaleway_s3_delete_bucket will succeed. Check last_run_at / last_status via " +
+          "scaleway_audit_list_export_jobs afterwards for the ongoing cadence. " +
           WRITE_PERMISSIONS_NOTE,
       inputSchema: createSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
