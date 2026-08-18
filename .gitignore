@@ -2,3 +2,9 @@ node_modules/
 dist/
 *.env
 .env
+
+# Scratch files from live-testing sessions against the real Scaleway account -
+# not part of the repo, never meant to be committed.
+jfr-analyzer.log*
+tmp-*.mjs
+.tmp-*.mjs
