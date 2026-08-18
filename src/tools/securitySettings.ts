@@ -53,6 +53,7 @@ export function registerSecuritySettings(server: McpServer, config: Config) {
         "current value untouched, unlike SAML/SCIM's enable endpoints (see docs/gotchas.md). Requires confirm=true.",
       inputSchema: {
         enforce_password_renewal: z.boolean().optional().describe("Force periodic password changes."),
+        grace_period_duration: z.string().optional().describe("Grace period before a locked/expired account is fully revoked, e.g. '259200s' (3 days)."),
         login_attempts_before_locked: z.number().int().min(1).optional().describe("Failed login attempts before an account is locked."),
         max_login_session_duration: z.string().optional().describe("Max session lifetime, e.g. '2592000s' (30 days)."),
         max_api_key_expiration_duration: z.string().optional().describe("Max allowed API key expiration duration, e.g. '0s' for no cap."),
@@ -60,10 +61,11 @@ export function registerSecuritySettings(server: McpServer, config: Config) {
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ enforce_password_renewal, login_attempts_before_locked, max_login_session_duration, max_api_key_expiration_duration }) =>
+    async ({ enforce_password_renewal, grace_period_duration, login_attempts_before_locked, max_login_session_duration, max_api_key_expiration_duration }) =>
       withIamErrorHandling(async () => {
         const s = await iamRequest<SecuritySettings>(config, "PATCH", `/organizations/${config.SCW_ORGANIZATION_ID}/security-settings`, {
           enforce_password_renewal,
+          grace_period_duration,
           login_attempts_before_locked,
           max_login_session_duration,
           max_api_key_expiration_duration,

@@ -6,15 +6,16 @@ import { toolJsonResult } from "../output.js";
 
 /**
  * IAM SAML SSO (issue #6) - org-wide, highest blast radius in this issue. Live-probed 2026-08-18:
- * the real path is `/organizations/{id}/saml` (the issue spec said flat `/saml`), and get/enable
- * is `POST /organizations/{id}/saml` - but **enable/update is DELETE/DISABLE via a DIFFERENT,
- * top-level path: `DELETE /saml/{saml_id}`** (not `/organizations/{id}/saml`, which 405s). See
- * docs/gotchas.md for the incident this was found from: an EMPTY POST body to this endpoint does
- * NOT validation-error like every other write endpoint in this API - it silently enables SAML
- * with a `missing_certificate` status. Every mutating tool here therefore requires its meaningful
- * fields as non-optional zod strings, specifically so this server can never send a near-empty body.
- * Certificates live at `/saml/{saml_id}/certificates` (confirmed via GET; POST shape unverified by
- * design - never sent a live create/enable call while building this after the incident above).
+ * - Read:     `GET /organizations/{id}/saml` (issue spec said flat `/saml`).
+ * - Enable:   `POST /organizations/{id}/saml` (same path, confirmed live).
+ * - Update:   `PATCH /organizations/{id}/saml` (per the API reference; not live-verified).
+ * - Disable:  top-level `DELETE /saml/{saml_id}` - NOT `/organizations/{id}/saml`, which 405s.
+ * - Certs:    `/saml/{saml_id}/certificates` (list via GET, confirmed; single-item + create shape unverified).
+ *
+ * Incident (see docs/gotchas.md): an EMPTY POST body to the enable endpoint does NOT
+ * validation-error like every other write endpoint in this API - it silently enables SAML with a
+ * `missing_certificate` status. Every mutating tool here therefore requires its meaningful fields
+ * as non-optional zod strings, so this server can never send a near-empty body.
  */
 interface SamlConfig {
   id: string;
@@ -84,7 +85,9 @@ export function registerSaml(server: McpServer, config: Config) {
     "scaleway_iam_update_saml",
     {
       title: "Update the Organization's SAML SSO configuration",
-      description: `Change the registered identity provider's entity_id/SSO URL. ${SAML_WARNING} Requires confirm=true.`,
+      description: `Change the registered identity provider's entity_id/SSO URL. ${SAML_WARNING} Requires confirm=true. ` +
+        "Method is PATCH per the API reference (distinct from enable, which is POST); the PATCH call itself was " +
+        "not live-verified (deliberately - see docs/gotchas.md).",
       inputSchema: {
         entity_id: z.string().min(1).describe("The identity provider's SAML entity ID (issuer URI)."),
         single_sign_on_url: z.string().url().describe("The identity provider's SSO redirect/POST URL."),
@@ -94,7 +97,7 @@ export function registerSaml(server: McpServer, config: Config) {
     },
     async ({ entity_id, single_sign_on_url }) =>
       withIamErrorHandling(async () => {
-        const c = await iamRequest<SamlConfig>(config, "POST", `/organizations/${config.SCW_ORGANIZATION_ID}/saml`, {
+        const c = await iamRequest<SamlConfig>(config, "PATCH", `/organizations/${config.SCW_ORGANIZATION_ID}/saml`, {
           entity_id,
           single_sign_on_url,
         });

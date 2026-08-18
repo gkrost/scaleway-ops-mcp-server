@@ -341,3 +341,22 @@ the call is expected to be a `create`-shaped action (validates) or an `enable`/`
 (may just apply defaults) - the latter deserves either a `GET`-only cross-check first (as was
 retroactively used to confirm the disable path here) or explicit user sign-off before attempting on
 a live account, same as this issue's own protocol already required for the *known* R3 mutations.
+
+## Unverified SAML/SCIM field shapes and paths (issue #6) - check before first live use
+
+Several SAML/SCIM tools could not be live-verified without re-creating the org-wide SSO/provisioning
+state (deliberately avoided after the empty-body enable incident above). These are best-effort
+guesses against Scaleway's conventions, each already flagged in its tool description, and may 400
+on first real use - listed here in one place:
+
+| Tool | What's unverified |
+|---|---|
+| `scaleway_iam_add_saml_certificate` | request field name is assumed `certificate` (PEM payload) |
+| `scaleway_iam_get_saml_certificate` | single-item path `/saml/{saml_id}/certificates/{id}` (list path is confirmed) |
+| `scaleway_iam_delete_saml_certificate` | same single-item path as get |
+| `scaleway_iam_create_scim_token` | request field name is assumed `description` |
+| `scaleway_iam_delete_scim_token` | single-item path `/scim/{scim_id}/tokens/{id}` (list path is confirmed) |
+| `scaleway_iam_update_saml` | HTTP method is `PATCH` per the API reference (distinct from enable's `POST`), never live-verified |
+
+Verify against the live API (with explicit user sign-off, given the blast radius) before any of
+these are relied on in production.
