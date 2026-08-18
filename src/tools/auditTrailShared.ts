@@ -4,7 +4,7 @@ import { AuditTrailApiError } from "../auditClient.js";
 import { toolError } from "../output.js";
 
 export const auditRegionSchema = z
-  .enum(["fr-par", "nl-ams"])
+  .enum(["fr-par", "nl-ams", "pl-waw"])
   .optional()
   .describe("Defaults to the server's configured region (fr-par).");
 
