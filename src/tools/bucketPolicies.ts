@@ -5,8 +5,9 @@ import type { Config } from "../config.js";
 import { getS3Client, handleS3 } from "../s3Client.js";
 import { toolJsonResult, toolError } from "../output.js";
 import { scwRegionSchema } from "../scwRegion.js";
+import { scwBucketNameSchema } from "../scwBucket.js";
 
-const bucketField = z.string().min(3).describe("Bucket name, e.g. 'payments-backups'.");
+const bucketField = scwBucketNameSchema.describe("Bucket name, e.g. 'payments-backups'.");
 const regionField = scwRegionSchema.optional().describe("Region the bucket lives in. Defaults to the server's configured region (fr-par).");
 
 const getSchema = {
