@@ -155,6 +155,18 @@ const putBinary = expectJson(
 );
 console.log("put binary object:", putBinary.key, putBinary.size_bytes, "bytes");
 
+// Overwrite guard (#48 review): put_object HEADs the key first and only demands confirm on the
+// branch that would actually clobber existing content - the two creates just above needed none.
+const overwriteRejected = await client.callTool({ name: "scaleway_s3_put_object", arguments: { bucket: objBucket, key: "hello.txt", content: "clobbered without confirm" } });
+if (!overwriteRejected.isError) { console.error("FAILED: put_object overwrite without confirm was accepted"); process.exit(1); }
+console.log("guard ok (put_object overwrite without confirm rejected):", text(overwriteRejected).slice(0, 110));
+const overwritten = expectJson(
+  await client.callTool({ name: "scaleway_s3_put_object", arguments: { bucket: objBucket, key: "hello.txt", content: textContent, content_type: "text/plain", confirm: true } }),
+  "put_object (overwrite with confirm)",
+);
+if (overwritten.overwritten !== true) { console.error(`FAILED: put_object overwrite did not report overwritten:true: ${JSON.stringify(overwritten)}`); process.exit(1); }
+console.log("put_object: overwrite with confirm accepted, overwritten:true echoed");
+
 const headText = expectJson(await client.callTool({ name: "scaleway_s3_head_object", arguments: { bucket: objBucket, key: "hello.txt" } }), "head_object (text)");
 if (headText.content_type !== "text/plain" || headText.size_bytes !== Buffer.byteLength(textContent, "utf8")) {
   console.error(`FAILED: head_object metadata mismatch: ${JSON.stringify(headText)}`);
@@ -208,6 +220,26 @@ if (!listAfterCopy.objects.some((o) => o.key === "hello-copy.txt")) {
   process.exit(1);
 }
 console.log("list_objects: copy confirmed present");
+
+// Overwrite guard (#48 review): copy_object HEADs dest_key first - the create above landed on a
+// fresh key and needed no confirm; copying onto that same key again must be rejected without one.
+const copyOverwriteRejected = await client.callTool({
+  name: "scaleway_s3_copy_object",
+  arguments: { source_bucket: objBucket, source_key: "pixel.png", dest_bucket: objBucket, dest_key: "hello-copy.txt" },
+});
+if (!copyOverwriteRejected.isError) { console.error("FAILED: copy_object overwrite without confirm was accepted"); process.exit(1); }
+console.log("guard ok (copy_object overwrite without confirm rejected):", text(copyOverwriteRejected).slice(0, 110));
+const copyOverwritten = expectJson(
+  await client.callTool({
+    name: "scaleway_s3_copy_object",
+    arguments: { source_bucket: objBucket, source_key: "pixel.png", dest_bucket: objBucket, dest_key: "hello-copy.txt", confirm: true },
+  }),
+  "copy_object (overwrite with confirm)",
+);
+if (copyOverwritten.overwritten !== true) { console.error(`FAILED: copy_object overwrite did not report overwritten:true: ${JSON.stringify(copyOverwritten)}`); process.exit(1); }
+console.log("copy_object: overwrite with confirm accepted, overwritten:true echoed");
+// hello-copy.txt is now pixel.png's bytes under hello.txt's old name - delete_objects below still
+// removes it by key regardless of content, so no extra cleanup is needed.
 
 const presigned = expectJson(
   await client.callTool({ name: "scaleway_s3_generate_presigned_url", arguments: { bucket: objBucket, key: "hello.txt", operation: "get", expires_in_seconds: 300 } }),
