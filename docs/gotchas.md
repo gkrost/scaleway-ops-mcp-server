@@ -159,8 +159,10 @@ immediately - and whoever that policy granted IAM management to (including this 
 permanently unable to call `set_policy_rules` or any other IAM policy/application tool to undo it.
 The tool now requires `confirm=true`, and the handler GETs the current rules first and refuses a
 replace that would drop `IAMPolicyManager` or `IAMApplicationManager` from a policy that currently
-has them. Policies that never carried those permission sets are unaffected. `delete_policy` now
-refuses the same class of lockout even with `confirm=true`.
+has them. The guard treats those permission sets as present only on a rule with `organization_id`
+(org-wide); keeping the name on a `project_ids` rule does not keep the grant. Policies that never
+carried those permission sets are unaffected. `delete_policy` now refuses the same class of
+lockout even with `confirm=true`.
 
 ### `delete_policy`'s own guard does not cover deleting the policy's principal instead
 
