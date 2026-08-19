@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+- `scaleway_iam_set_policy_rules` now requires `confirm=true` and refuses a full-replace that would drop `IAMPolicyManager`/`IAMApplicationManager` from a policy that currently grants them, so a stale or incomplete rules array cannot permanently lock this credential out of IAM (issue #25).
+
 ## 0.1.1
 
 Security fix: `access_key` (`scaleway_iam_update_api_key`/`scaleway_iam_delete_api_key`) and `jti`
