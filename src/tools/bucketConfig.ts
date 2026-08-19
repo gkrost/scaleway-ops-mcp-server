@@ -27,6 +27,7 @@ import type { Config } from "../config.js";
 import { getS3Client, handleS3 } from "../s3Client.js";
 import { toolJsonResult, toolError } from "../output.js";
 import { scwRegionSchema } from "../scwRegion.js";
+import { scwBucketNameSchema } from "../scwBucket.js";
 
 /**
  * Bucket-level configuration management (issue #7): tagging, CORS, versioning, website,
@@ -35,7 +36,7 @@ import { scwRegionSchema } from "../scwRegion.js";
  * see docs/gotchas.md for the probe evidence. Bucket logging and bucket metrics are NOT here:
  * Scaleway's S3 endpoint returns NotImplemented for both (live-verified 2026-08-18).
  */
-const bucketField = z.string().min(3).describe("Bucket name.");
+const bucketField = scwBucketNameSchema.describe("Bucket name.");
 const regionField = scwRegionSchema.optional().describe("Region to operate in. Defaults to the server's configured region (fr-par).");
 const confirmField = z.literal(true).describe("Must be explicitly true.");
 

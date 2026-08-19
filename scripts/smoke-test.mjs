@@ -50,6 +50,16 @@ function expectJson(res, label) {
   return JSON.parse(text(res));
 }
 
+async function expectError(name, args, label) {
+  const res = await client.callTool({ name, arguments: args });
+  if (!res.isError) {
+    console.error(`FAILED at "${label}": expected an error, got success`);
+    process.exit(1);
+  }
+  console.log(`guard ok (${label}): ${text(res).slice(0, 110)}`);
+  return text(res);
+}
+
 console.log("=== scaleway_iam_list_api_keys (filter: scaleway-ops app) ===");
 const apps = await client.callTool({ name: "scaleway_iam_list_applications", arguments: { name_filter: "scaleway-ops" } });
 const appId = expectJson(apps, "list_applications").applications[0].id;
@@ -220,6 +230,11 @@ if (!listAfterCopy.objects.some((o) => o.key === "hello-copy.txt")) {
   process.exit(1);
 }
 console.log("list_objects: copy confirmed present");
+await expectError(
+  "scaleway_s3_copy_object",
+  { source_bucket: `${objBucket}/nested`, source_key: "hello.txt", dest_bucket: objBucket, dest_key: "should-not-copy.txt" },
+  "copy_object source_bucket with slash rejected",
+);
 
 // Overwrite guard (#48 review): copy_object HEADs dest_key first - the create above landed on a
 // fresh key and needed no confirm; copying onto that same key again must be rejected without one.
@@ -353,16 +368,6 @@ if (createdRule.isError) {
 console.log("\n=== BUCKET CONFIG (issue #7): full config lifecycle on a throwaway bucket ===");
 const cfgBucket = `mcp-smoke-test-config-${Date.now()}`;
 expectJson(await client.callTool({ name: "scaleway_s3_create_bucket", arguments: { bucket: cfgBucket } }), "create config bucket");
-
-async function expectError(name, args, label) {
-  const res = await client.callTool({ name, arguments: args });
-  if (!res.isError) {
-    console.error(`FAILED at "${label}": expected an error, got success`);
-    process.exit(1);
-  }
-  console.log(`guard ok (${label}): ${text(res).slice(0, 110)}`);
-  return text(res);
-}
 
 try {
   // --- tagging ---
