@@ -159,7 +159,8 @@ immediately - and whoever that policy granted IAM management to (including this 
 permanently unable to call `set_policy_rules` or any other IAM policy/application tool to undo it.
 The tool now requires `confirm=true`, and the handler GETs the current rules first and refuses a
 replace that would drop `IAMPolicyManager` or `IAMApplicationManager` from a policy that currently
-has them. Policies that never carried those permission sets are unaffected.
+has them. Policies that never carried those permission sets are unaffected. `delete_policy` now
+refuses the same class of lockout even with `confirm=true`.
 
 ## `POST /policies/{id}/clone` ignores its request body and always returns the clone unattached
 
