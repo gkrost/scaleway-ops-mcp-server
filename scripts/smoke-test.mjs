@@ -434,6 +434,9 @@ console.log("\n=== IAM USERS (issue #4): path-2 verification - reads live, mutat
 const usersList = expectJson(await client.callTool({ name: "scaleway_iam_list_users", arguments: {} }), "list_users");
 if (usersList.total_count < 1) { console.error("FAILED: expected at least the org owner in list_users"); process.exit(1); }
 const owner = usersList.users.find((u) => u.type === "owner");
+// CodeQL js/clear-text-logging flags this (dismissed as false positive - see the alert):
+// this is a manual, local-only dev utility printing the caller's own account data to their own
+// terminal, not a service log. Neither id nor mfa_enabled is a secret.
 console.log(`list_users: ${usersList.total_count} user(s), owner present: ${!!owner} (id ${owner?.id ?? "-"}, mfa: ${owner?.mfa_enabled})`);
 
 const gotUser = expectJson(await client.callTool({ name: "scaleway_iam_get_user", arguments: { user_id: owner.id } }), "get_user");
@@ -485,7 +488,7 @@ const bogusPassword = await client.callTool({
   arguments: { user_id: bogusId, password: "Xy9!mQ2#kL7%pR4z", confirm: true },
 });
 if (!bogusPassword.isError || !text(bogusPassword).includes("resource is not found")) {
-  console.error(`FAILED: update_user_password did not surface the expected bogus-id 404 (password body likely not sent): ${text(bogusPassword)}`);
+  console.error(`FAILED: update_user_password did not surface the expected bogus-id 404 (password body likely not sent): ${text(bogusPassword).slice(0, 100)}`);
   process.exit(1);
 }
 console.log("api err ok (password bogus id): password reached the API and the id lookup 404'd, as expected");
