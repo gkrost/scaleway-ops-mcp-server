@@ -50,6 +50,7 @@ const createSchema = {
   prefix: z.string().optional().describe("Key prefix inside the bucket to write under, e.g. 'audit-trail/'."),
   project_id: z.string().uuid().optional().describe("Project owning the destination bucket. Defaults to the server's configured Project."),
   tags: z.array(z.string()).optional().describe("Tags for the export job."),
+  confirm: confirmSchema.describe("Must be explicitly true. Creation triggers an immediate backfill of real audit events into the destination bucket; delete does not remove those objects."),
 };
 
 const deleteSchema = {
@@ -97,8 +98,8 @@ export function registerAuditTrailExports(server: McpServer, config: Config) {
     {
       title: "Create a Scaleway Audit Trail export job",
       description:
-        "Create an export job shipping Audit Trail events to an Object Storage bucket (S3 destination). The " +
-          "bucket must already exist and be writable - create it first (e.g. scaleway_s3_create_bucket). " +
+        "Create an export job shipping Audit Trail events to an Object Storage bucket (S3 destination). Requires " +
+          "confirm=true. The bucket must already exist and be writable - create it first (e.g. scaleway_s3_create_bucket). " +
           "Live-verified 2026-08-18: creation triggers an IMMEDIATE backfill, not just a future cadence - a fresh " +
           "job wrote ~6 days of past daily log objects (one JSON file per day, e.g. '2026/07/12/logs_*.json') into " +
           "the bucket within seconds of creation. scaleway_audit_delete_export_job does not delete these - if you " +
@@ -109,7 +110,7 @@ export function registerAuditTrailExports(server: McpServer, config: Config) {
       inputSchema: createSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async ({ region, name, bucket, bucket_region, prefix, project_id, tags }) =>
+    async ({ region, name, bucket, bucket_region, prefix, project_id, tags, confirm }) =>
       handleAudit(async () => {
         const r = region ?? config.SCW_DEFAULT_REGION;
         const job = await auditRequest<ExportJob>(config, `/regions/${r}/export-jobs`, {
