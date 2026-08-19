@@ -36,13 +36,32 @@ Environment variables (see `.env.example`):
 
 **The credential this server runs as needs its own IAM Policy** granting (at minimum)
 `IAMApplicationManager` + `IAMPolicyManager` (organization scope) and `ObjectStorageFullAccess`
-(project scope) - see `docs/gotchas.md` for why these must be two separate policy rules. The
-`scaleway-ops-mcp` Application (provisioned 2026-08-12) already has this; reuse its credential
-rather than minting a new one unless you specifically want a differently-scoped identity.
+(project scope) - see `docs/gotchas.md` for why these must be two separate policy rules. Create a
+dedicated IAM Application for this server (don't reuse a human user's credential or an
+Application scoped for something else) and grant it only what the table above needs.
 
 ## Running
 
-Via Claude Code / any MCP client, as a stdio server:
+Via Claude Code / any MCP client, as a stdio server. Simplest, via `npx` (no local clone needed):
+
+```json
+{
+  "mcpServers": {
+    "scaleway-ops": {
+      "command": "npx",
+      "args": ["-y", "scaleway-ops-mcp-server"],
+      "env": {
+        "SCW_ACCESS_KEY": "...",
+        "SCW_SECRET_KEY": "...",
+        "SCW_ORGANIZATION_ID": "...",
+        "SCW_PROJECT_ID": "..."
+      }
+    }
+  }
+}
+```
+
+Or from a local clone/build, useful for development or pinning to an unreleased commit:
 
 ```json
 {
