@@ -434,9 +434,10 @@ console.log("\n=== IAM USERS (issue #4): path-2 verification - reads live, mutat
 const usersList = expectJson(await client.callTool({ name: "scaleway_iam_list_users", arguments: {} }), "list_users");
 if (usersList.total_count < 1) { console.error("FAILED: expected at least the org owner in list_users"); process.exit(1); }
 const owner = usersList.users.find((u) => u.type === "owner");
-const ownerId = owner?.id ?? "-";
-const ownerMfaEnabled = owner?.mfa_enabled;
-console.log(`list_users: ${usersList.total_count} user(s), owner present: ${!!owner} (id ${ownerId}, mfa: ${ownerMfaEnabled})`);
+// CodeQL js/clear-text-logging flags this (dismissed as false positive - see the alert):
+// this is a manual, local-only dev utility printing the caller's own account data to their own
+// terminal, not a service log. Neither id nor mfa_enabled is a secret.
+console.log(`list_users: ${usersList.total_count} user(s), owner present: ${!!owner} (id ${owner?.id ?? "-"}, mfa: ${owner?.mfa_enabled})`);
 
 const gotUser = expectJson(await client.callTool({ name: "scaleway_iam_get_user", arguments: { user_id: owner.id } }), "get_user");
 if (gotUser.id !== owner.id || gotUser.type !== "owner") { console.error("FAILED: get_user mismatch"); process.exit(1); }
