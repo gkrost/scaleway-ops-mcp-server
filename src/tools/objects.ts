@@ -127,6 +127,12 @@ const presignedUrlSchema = {
   operation: z.enum(["get", "put"]).describe("'get' for a time-limited download URL, 'put' for a time-limited upload URL."),
   expires_in_seconds: z.number().int().min(60).max(604_800).default(3600).describe("URL validity window. S3's own hard ceiling is 7 days (604800s)."),
   content_type: z.string().optional().describe("For operation='put' only: constrains the presigned URL to uploads declaring this exact Content-Type."),
+  confirm: z
+    .literal(true)
+    .optional()
+    .describe(
+      "Required true when operation='put'. Put hands back a time-limited unauthenticated write URL that anyone who holds it can use to overwrite the object for up to 7 days.",
+    ),
 };
 
 export function registerObjects(server: McpServer, config: Config) {
@@ -376,12 +382,18 @@ export function registerObjects(server: McpServer, config: Config) {
       title: "Generate a time-limited presigned URL for an object",
       description:
         "Generate a URL that grants direct GET or PUT access to one object for a limited time, without exposing this server's credential. " +
-        "Useful for handing a download/upload link to something outside MCP, or for content too large for scaleway_s3_get_object/put_object's inline transfer.",
+        "Useful for handing a download/upload link to something outside MCP, or for content too large for scaleway_s3_get_object/put_object's inline transfer. " +
+        "operation='put' requires confirm=true because it exports a write capability outside the MCP boundary.",
       inputSchema: presignedUrlSchema,
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    async ({ bucket, region, key, operation, expires_in_seconds, content_type }) =>
+    async ({ bucket, region, key, operation, expires_in_seconds, content_type, confirm }) =>
       handleS3(async () => {
+        if (operation === "put" && confirm !== true) {
+          return toolError(
+            "Generating a presigned PUT URL requires confirm: true (it hands back a time-limited unauthenticated write URL usable outside the MCP boundary).",
+          ) as never;
+        }
         const client = getS3Client(config, region);
         const command =
           operation === "get"
