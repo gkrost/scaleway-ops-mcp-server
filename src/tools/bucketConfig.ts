@@ -63,15 +63,16 @@ export function registerBucketConfig(server: McpServer, config: Config) {
     {
       title: "Set Scaleway bucket tags (full replace)",
       description:
-        "Set a bucket's tags. FULL-REPLACE semantics: the provided list becomes the complete tag set - tags not in the list are removed.",
+        "Set a bucket's tags. FULL-REPLACE semantics: the provided list becomes the complete tag set - tags not in the list are removed. Requires confirm=true (full-replace).",
       inputSchema: {
         bucket: bucketField,
         region: regionField,
         tags: z.array(z.object({ key: z.string().min(1), value: z.string() })).min(1).describe("The COMPLETE tag set to apply."),
+        confirm: confirmField,
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ bucket, region, tags }) =>
+    async ({ bucket, region, tags, confirm }) =>
       handleS3(async () => {
         await getS3Client(config, region).send(
           new PutBucketTaggingCommand({ Bucket: bucket, Tagging: { TagSet: tags.map((t) => ({ Key: t.key, Value: t.value })) } }),
@@ -123,7 +124,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
     {
       title: "Set Scaleway bucket CORS rules (full replace)",
       description:
-        "Set a bucket's CORS rules. FULL-REPLACE semantics: the provided list becomes the complete rule set - existing rules not in the list are removed. This loosens or restricts browser cross-origin access to the bucket.",
+        "Set a bucket's CORS rules. FULL-REPLACE semantics: the provided list becomes the complete rule set - existing rules not in the list are removed. This loosens or restricts browser cross-origin access to the bucket. Requires confirm=true (full-replace).",
       inputSchema: {
         bucket: bucketField,
         region: regionField,
@@ -139,10 +140,11 @@ export function registerBucketConfig(server: McpServer, config: Config) {
           )
           .min(1)
           .describe("The COMPLETE CORS rule set to apply."),
+        confirm: confirmField,
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ bucket, region, rules }) =>
+    async ({ bucket, region, rules, confirm }) =>
       handleS3(async () => {
         await getS3Client(config, region).send(
           new PutBucketCorsCommand({

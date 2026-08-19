@@ -155,6 +155,18 @@ const putBinary = expectJson(
 );
 console.log("put binary object:", putBinary.key, putBinary.size_bytes, "bytes");
 
+// Overwrite guard (#48 review): put_object HEADs the key first and only demands confirm on the
+// branch that would actually clobber existing content - the two creates just above needed none.
+const overwriteRejected = await client.callTool({ name: "scaleway_s3_put_object", arguments: { bucket: objBucket, key: "hello.txt", content: "clobbered without confirm" } });
+if (!overwriteRejected.isError) { console.error("FAILED: put_object overwrite without confirm was accepted"); process.exit(1); }
+console.log("guard ok (put_object overwrite without confirm rejected):", text(overwriteRejected).slice(0, 110));
+const overwritten = expectJson(
+  await client.callTool({ name: "scaleway_s3_put_object", arguments: { bucket: objBucket, key: "hello.txt", content: textContent, content_type: "text/plain", confirm: true } }),
+  "put_object (overwrite with confirm)",
+);
+if (overwritten.overwritten !== true) { console.error(`FAILED: put_object overwrite did not report overwritten:true: ${JSON.stringify(overwritten)}`); process.exit(1); }
+console.log("put_object: overwrite with confirm accepted, overwritten:true echoed");
+
 const headText = expectJson(await client.callTool({ name: "scaleway_s3_head_object", arguments: { bucket: objBucket, key: "hello.txt" } }), "head_object (text)");
 if (headText.content_type !== "text/plain" || headText.size_bytes !== Buffer.byteLength(textContent, "utf8")) {
   console.error(`FAILED: head_object metadata mismatch: ${JSON.stringify(headText)}`);
@@ -187,7 +199,7 @@ console.log("get_object binary: byte-identical round-trip confirmed (base64)");
 const tagsBefore = expectJson(await client.callTool({ name: "scaleway_s3_get_object_tags", arguments: { bucket: objBucket, key: "hello.txt" } }), "get_object_tags (before)");
 console.log("tags before:", JSON.stringify(tagsBefore.tags));
 expectJson(
-  await client.callTool({ name: "scaleway_s3_put_object_tags", arguments: { bucket: objBucket, key: "hello.txt", tags: { env: "smoke-test" } } }),
+  await client.callTool({ name: "scaleway_s3_put_object_tags", arguments: { bucket: objBucket, key: "hello.txt", tags: { env: "smoke-test" }, confirm: true } }),
   "put_object_tags",
 );
 const tagsAfter = expectJson(await client.callTool({ name: "scaleway_s3_get_object_tags", arguments: { bucket: objBucket, key: "hello.txt" } }), "get_object_tags (after)");
@@ -208,6 +220,26 @@ if (!listAfterCopy.objects.some((o) => o.key === "hello-copy.txt")) {
   process.exit(1);
 }
 console.log("list_objects: copy confirmed present");
+
+// Overwrite guard (#48 review): copy_object HEADs dest_key first - the create above landed on a
+// fresh key and needed no confirm; copying onto that same key again must be rejected without one.
+const copyOverwriteRejected = await client.callTool({
+  name: "scaleway_s3_copy_object",
+  arguments: { source_bucket: objBucket, source_key: "pixel.png", dest_bucket: objBucket, dest_key: "hello-copy.txt" },
+});
+if (!copyOverwriteRejected.isError) { console.error("FAILED: copy_object overwrite without confirm was accepted"); process.exit(1); }
+console.log("guard ok (copy_object overwrite without confirm rejected):", text(copyOverwriteRejected).slice(0, 110));
+const copyOverwritten = expectJson(
+  await client.callTool({
+    name: "scaleway_s3_copy_object",
+    arguments: { source_bucket: objBucket, source_key: "pixel.png", dest_bucket: objBucket, dest_key: "hello-copy.txt", confirm: true },
+  }),
+  "copy_object (overwrite with confirm)",
+);
+if (copyOverwritten.overwritten !== true) { console.error(`FAILED: copy_object overwrite did not report overwritten:true: ${JSON.stringify(copyOverwritten)}`); process.exit(1); }
+console.log("copy_object: overwrite with confirm accepted, overwritten:true echoed");
+// hello-copy.txt is now pixel.png's bytes under hello.txt's old name - delete_objects below still
+// removes it by key regardless of content, so no extra cleanup is needed.
 
 const presigned = expectJson(
   await client.callTool({ name: "scaleway_s3_generate_presigned_url", arguments: { bucket: objBucket, key: "hello.txt", operation: "get", expires_in_seconds: 300 } }),
@@ -334,10 +366,11 @@ async function expectError(name, args, label) {
 
 try {
   // --- tagging ---
+  await expectError("scaleway_s3_put_bucket_tagging", { bucket: cfgBucket, tags: [{ key: "purpose", value: "smoke-test" }] }, "put_bucket_tagging without confirm rejected");
   const tags = expectJson(
     await client.callTool({
       name: "scaleway_s3_put_bucket_tagging",
-      arguments: { bucket: cfgBucket, tags: [{ key: "purpose", value: "smoke-test" }, { key: "owner", value: "mcp" }] },
+      arguments: { bucket: cfgBucket, tags: [{ key: "purpose", value: "smoke-test" }, { key: "owner", value: "mcp" }], confirm: true },
     }),
     "put_bucket_tagging",
   );
@@ -349,10 +382,11 @@ try {
   await expectError("scaleway_s3_get_bucket_tagging", { bucket: cfgBucket }, "no tags after delete");
 
   // --- CORS ---
+  await expectError("scaleway_s3_put_bucket_cors", { bucket: cfgBucket, rules: [{ allowed_origins: ["https://example.com"], allowed_methods: ["GET"] }] }, "put_bucket_cors without confirm rejected");
   expectJson(
     await client.callTool({
       name: "scaleway_s3_put_bucket_cors",
-      arguments: { bucket: cfgBucket, rules: [{ allowed_origins: ["https://example.com"], allowed_methods: ["GET"], max_age_seconds: 900 }] },
+      arguments: { bucket: cfgBucket, rules: [{ allowed_origins: ["https://example.com"], allowed_methods: ["GET"], max_age_seconds: 900 }], confirm: true },
     }),
     "put_bucket_cors",
   );
@@ -385,6 +419,7 @@ try {
   await expectError("scaleway_s3_set_bucket_visibility", { bucket: cfgBucket, visibility: "public-read" }, "public without confirm rejected");
   await expectError("scaleway_s3_generate_presigned_url", { bucket: cfgBucket, key: "probe.txt", operation: "put" }, "presigned put without confirm rejected");
   await expectError("scaleway_s3_put_bucket_policy", { bucket: cfgBucket, policy_json: "{\"Version\":\"2023-04-17\",\"Statement\":[]}" }, "put_bucket_policy without confirm rejected");
+  await expectError("scaleway_s3_put_object_tags", { bucket: cfgBucket, key: "probe.txt", tags: { env: "x" } }, "put_object_tags without confirm rejected");
   console.log("visibility public:", text(await client.callTool({ name: "scaleway_s3_set_bucket_visibility", arguments: { bucket: cfgBucket, visibility: "public-read", confirm: true } })).slice(0, 80));
   const vis1 = expectJson(await client.callTool({ name: "scaleway_s3_get_bucket_visibility", arguments: { bucket: cfgBucket } }), "get visibility public");
   if (vis1.visibility !== "public") { console.error("FAILED: visibility not public after set"); process.exit(1); }

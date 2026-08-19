@@ -10,7 +10,9 @@ import {
   ListObjectsV2Command,
   PutObjectCommand,
   PutObjectTaggingCommand,
+  S3ServiceException,
 } from "@aws-sdk/client-s3";
+import type { S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { Config } from "../config.js";
 import { getS3Client, handleS3 } from "../s3Client.js";
@@ -39,6 +41,17 @@ async function bodyToBuffer(body: unknown): Promise<Buffer> {
   return Buffer.from(await stream.transformToByteArray());
 }
 
+/** True if `key` already exists in `bucket` - a cheap HEAD, swallowing only the "not found" case. */
+async function objectExists(client: S3Client, bucket: string, key: string): Promise<boolean> {
+  try {
+    await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    return true;
+  } catch (err) {
+    if (err instanceof S3ServiceException && err.name === "NotFound") return false;
+    throw err;
+  }
+}
+
 const putObjectSchema = {
   bucket: bucketField,
   region: regionField,
@@ -53,6 +66,14 @@ const putObjectSchema = {
     ),
   encoding: z.enum(["utf8", "base64"]).default("utf8").describe("How to interpret 'content' before uploading."),
   content_type: z.string().optional().describe("MIME type, e.g. 'application/pdf' or 'image/png'. Guessed by S3 as octet-stream if omitted."),
+  confirm: z
+    .literal(true)
+    .optional()
+    .describe(
+      "Required true when an object already exists at this bucket/key: this call would overwrite it, and the prior " +
+        "content is gone the same way scaleway_s3_delete_object's is (unless the bucket has versioning enabled, " +
+        "which this server does not manage). Not required when writing a new key.",
+    ),
 };
 
 const getObjectSchema = {
@@ -82,6 +103,14 @@ const copyObjectSchema = {
   dest_bucket: bucketField.describe("Bucket the object is copied TO. Same as source_bucket for a same-bucket copy (e.g. a rename)."),
   dest_key: keyField.describe("Key the copy is written to."),
   region: regionField.describe("Region both buckets live in. Cross-region copy is out of scope - source and destination must be in the same region."),
+  confirm: z
+    .literal(true)
+    .optional()
+    .describe(
+      "Required true when an object already exists at dest_bucket/dest_key: this call would overwrite it, the same " +
+        "class of loss as scaleway_s3_delete_object (unless the bucket has versioning enabled, which this server " +
+        "does not manage). Not required when the destination key is new.",
+    ),
 };
 
 const deleteObjectSchema = {
@@ -119,6 +148,7 @@ const putObjectTagsSchema = {
         "object's entire tag set, it does not merge - call scaleway_s3_get_object_tags first if you need to keep " +
         "existing tags, same replace-not-merge semantics as scaleway_s3_put_bucket_policy.",
     ),
+  confirm: z.literal(true).describe("Must be explicitly true. Replacement is immediate and does not merge (omitted tags are dropped)."),
 };
 
 const presignedUrlSchema = {
@@ -141,11 +171,14 @@ export function registerObjects(server: McpServer, config: Config) {
     "scaleway_s3_put_object",
     {
       title: "Upload an object to Scaleway Object Storage",
-      description: "Upload (or overwrite) a single object. Single-part only - see the 'content' field for the size ceiling and the binary-payload encoding.",
+      description:
+        "Upload (or overwrite) a single object. Single-part only - see the 'content' field for the size ceiling and " +
+        "the binary-payload encoding. Requires confirm=true when this would overwrite an existing key (checked with " +
+        "a HEAD before writing) - a plain new-object upload needs no confirm.",
       inputSchema: putObjectSchema,
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ bucket, region, key, content, encoding, content_type }) => {
+    async ({ bucket, region, key, content, encoding, content_type, confirm }) => {
       const body = encoding === "base64" ? Buffer.from(content, "base64") : Buffer.from(content, "utf8");
       if (body.byteLength > config.MAX_PUT_OBJECT_BYTES) {
         return toolError(
@@ -155,9 +188,17 @@ export function registerObjects(server: McpServer, config: Config) {
       }
       return handleS3(async () => {
         const client = getS3Client(config, region);
+        const overwriting = await objectExists(client, bucket, key);
+        if (overwriting && confirm !== true) {
+          return toolError(
+            `An object already exists at ${bucket}/${key} - this call would overwrite it. Requires confirm: true ` +
+              "(same class of loss as scaleway_s3_delete_object, unless the bucket has versioning enabled, which " +
+              "this server does not manage). Use scaleway_s3_head_object first if you want to inspect what's there.",
+          ) as never;
+        }
         const res = await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: content_type }));
         return toolJsonResult(
-          { bucket, key, region: region ?? config.SCW_DEFAULT_REGION, size_bytes: body.byteLength, etag: res.ETag, uploaded: true },
+          { bucket, key, region: region ?? config.SCW_DEFAULT_REGION, size_bytes: body.byteLength, etag: res.ETag, uploaded: true, overwritten: overwriting },
           config.MAX_OUTPUT_CHARS,
         );
       });
@@ -288,13 +329,25 @@ export function registerObjects(server: McpServer, config: Config) {
     "scaleway_s3_copy_object",
     {
       title: "Copy an object within or across Scaleway Object Storage buckets",
-      description: "Server-side copy of one object to a new bucket/key, without downloading and re-uploading. Source and destination must be in the same region.",
+      description:
+        "Server-side copy of one object to a new bucket/key, without downloading and re-uploading. Source and " +
+        "destination must be in the same region. Requires confirm=true when the destination key already exists " +
+        "(checked with a HEAD before copying) - copying to a new key needs no confirm.",
       inputSchema: copyObjectSchema,
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ source_bucket, source_key, dest_bucket, dest_key, region }) =>
+    async ({ source_bucket, source_key, dest_bucket, dest_key, region, confirm }) =>
       handleS3(async () => {
         const client = getS3Client(config, region);
+        const overwriting = await objectExists(client, dest_bucket, dest_key);
+        if (overwriting && confirm !== true) {
+          return toolError(
+            `An object already exists at ${dest_bucket}/${dest_key} - this copy would overwrite it. Requires ` +
+              "confirm: true (same class of loss as scaleway_s3_delete_object, unless the bucket has versioning " +
+              "enabled, which this server does not manage). Use scaleway_s3_head_object first if you want to " +
+              "inspect what's there.",
+          ) as never;
+        }
         const res = await client.send(
           new CopyObjectCommand({
             Bucket: dest_bucket,
@@ -311,6 +364,7 @@ export function registerObjects(server: McpServer, config: Config) {
             region: region ?? config.SCW_DEFAULT_REGION,
             etag: res.CopyObjectResult?.ETag,
             copied: true,
+            overwritten: overwriting,
           },
           config.MAX_OUTPUT_CHARS,
         );
@@ -380,11 +434,11 @@ export function registerObjects(server: McpServer, config: Config) {
     "scaleway_s3_put_object_tags",
     {
       title: "Set an object's tags",
-      description: "Replace an object's entire tag set. This REPLACES, it does not merge - see the 'tags' field.",
+      description: "Replace an object's entire tag set. This REPLACES, it does not merge - see the 'tags' field. Requires confirm=true.",
       inputSchema: putObjectTagsSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ bucket, region, key, tags }) =>
+    async ({ bucket, region, key, tags, confirm }) =>
       handleS3(async () => {
         const client = getS3Client(config, region);
         await client.send(
