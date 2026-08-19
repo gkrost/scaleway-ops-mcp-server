@@ -4,6 +4,7 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- `scaleway_iam_delete_api_key` now refuses (even with `confirm=true`) to delete THIS server's own operating credential (the key matching `SCW_ACCESS_KEY`), and `scaleway_iam_delete_application` now refuses to delete the Application that owns it - deleting either would revoke every capability this server has (not just IAM management, the class of lockout #43 covers) with no way to undo it through this server afterward (#63).
 
 - `scaleway_iam_delete_policy` now GETs current rules first and refuses the delete if the policy currently grants `IAMPolicyManager`/`IAMApplicationManager`, even with `confirm=true` (issue #43).
 - `scaleway_iam_delete_application`/`scaleway_iam_delete_group` now refuse (even with `confirm=true`) when a policy attached to that Application/Group currently grants `IAMPolicyManager`/`IAMApplicationManager`: Scaleway detaches (does not delete) a policy when its principal is deleted, so this was a second, unguarded path to the same lockout `delete_policy` refuses (issue #43 follow-up, found in review). `scripts/smoke-test.mjs`'s group_id-principal cross-check policy no longer uses `IAMPolicyManager` for this reason - it was silently failing to clean itself up under the new `delete_policy` guard.
