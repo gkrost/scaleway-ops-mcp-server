@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here.
 
+## 0.1.1
+
+Security fix: `access_key` (`scaleway_iam_update_api_key`/`scaleway_iam_delete_api_key`) and `jti`
+(`scaleway_iam_get_jwt`/`scaleway_iam_delete_jwt`) were the only ID-shaped fields in the tool set
+without a format constraint - every other ID field uses `.uuid()`. Both were interpolated
+directly into a request path, and an unexpected value could cause the request this server sends
+to land on a different API path than the tool call's own name/description implies. Both fields
+now require a strict alphanumeric (`access_key`) / alphanumeric-plus-hyphen (`jti`) format,
+matching Scaleway's real key/token id shapes - no behavior change for legitimate values.
+
 ## 0.1.0
 
 First release. Covers three Scaleway product areas:
