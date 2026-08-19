@@ -90,7 +90,17 @@ export function registerUsers(server: McpServer, config: Config) {
       inputSchema: {
         email: z.string().email().describe("The person's email address - receives the invitation."),
         type: z.enum(["guest", "member"]).default("guest").describe("User type. 'guest' default (inferred, unverified)."),
-        tags: z.array(z.string()).optional(),
+        tags: z
+          .array(z.string())
+          .max(10)
+          .optional()
+          .describe(
+            "Structured metadata, max 10. Locked vocabulary in this org: 'env={prod|dev|local|ci|shared}', " +
+              "'access={ro|rw|admin|full}', 'owner=<team-or-tool>', 'issue=<n>', 'managed-by={mcp|manual|terraform}'. " +
+              "Use '=' as the separator, not ':' - Scaleway's tags API rejects colons " +
+              "(validated against ^[a-zA-Z0-9._\\-/=+@ ]+$, confirmed empirically 2026-08-18). " +
+              "This array is the complete tag set on the created user - pass every tag you want, not a partial list.",
+          ),
         confirm: confirmField.describe("Must be explicitly true - sends a real invitation email."),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
