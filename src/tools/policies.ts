@@ -11,9 +11,9 @@ interface Rule {
   organization_id?: string;
 }
 
-export function grantsIamManagement(rules: Rule[]): boolean {
-  const names = new Set(rules.flatMap((r) => r.permission_set_names));
-  return names.has("IAMPolicyManager") || names.has("IAMApplicationManager");
+export function grantsIamManagement(rules: Rule[], organizationId: string): boolean {
+  const allowed = new Set([organizationId]);
+  return LOCKOUT_PERMISSION_SETS.some((name) => hasOrgScopedLockoutGrant(rules, name, allowed));
 }
 
 export interface IamManagementPolicyRef {
@@ -42,7 +42,7 @@ export async function findIamManagementPoliciesFor(
   const flagged: IamManagementPolicyRef[] = [];
   for (const p of attached) {
     const rules = await iamListAll<Rule>(config, `/rules?policy_id=${p.id}`, "rules");
-    if (grantsIamManagement(rules)) flagged.push({ id: p.id, name: p.name });
+    if (grantsIamManagement(rules, config.SCW_ORGANIZATION_ID)) flagged.push({ id: p.id, name: p.name });
   }
   return flagged;
 }
@@ -64,6 +64,37 @@ interface Policy {
   tags?: string[];
 }
 
+const LOCKOUT_PERMISSION_SETS = ["IAMPolicyManager", "IAMApplicationManager"] as const;
+
+type RuleScope = {
+  permission_set_names: string[];
+  organization_id?: string;
+};
+
+/** Org-wide IAM-management grant: the name on a rule with organization_id. Project-scoped does not count. */
+function hasOrgScopedLockoutGrant(
+  rules: RuleScope[],
+  permissionSetName: string,
+  allowedOrganizationIds: ReadonlySet<string>,
+): boolean {
+  return rules.some(
+    (rule) =>
+      typeof rule.organization_id === "string" &&
+      allowedOrganizationIds.has(rule.organization_id) &&
+      rule.permission_set_names.includes(permissionSetName),
+  );
+}
+
+function currentOrgIdsForLockoutGrant(rules: RuleScope[], permissionSetName: string): string[] {
+  return [
+    ...new Set(
+      rules
+        .filter((rule) => rule.organization_id && rule.permission_set_names.includes(permissionSetName))
+        .map((rule) => rule.organization_id as string),
+    ),
+  ];
+}
+
 const ruleSchema = z
   .object({
     permission_set_names: z
@@ -80,7 +111,10 @@ const ruleSchema = z
       .optional()
       .describe("Organization-scoped rule: use for permission sets with scope_type='organization' (e.g. IAMPolicyManager, IAMApplicationManager). Mutually exclusive with project_ids."),
   })
-  .describe("Exactly one of project_ids/organization_id should be set, matching the scope_type of this rule's permission sets.");
+  .describe("Exactly one of project_ids/organization_id should be set, matching the scope_type of this rule's permission sets.")
+  .refine((rule) => (rule.project_ids !== undefined) !== (rule.organization_id !== undefined), {
+    message: "Exactly one of project_ids or organization_id must be set (not both, not neither).",
+  });
 
 const createSchema = {
   name: z
@@ -325,19 +359,21 @@ export function registerPolicies(server: McpServer, config: Config) {
     async ({ policy_id, rules, confirm }) =>
       withIamErrorHandling(async () => {
         const currentRules = await iamListAll<Rule>(config, `/rules?policy_id=${policy_id}`, "rules");
-        if (grantsIamManagement(currentRules)) {
-          const currentSets = new Set(currentRules.flatMap((r) => r.permission_set_names));
-          const incomingSets = new Set(rules.flatMap((r) => r.permission_set_names));
-          const droppingPolicyManager = currentSets.has("IAMPolicyManager") && !incomingSets.has("IAMPolicyManager");
-          const droppingApplicationManager =
-            currentSets.has("IAMApplicationManager") && !incomingSets.has("IAMApplicationManager");
-          if (droppingPolicyManager || droppingApplicationManager) {
-            return toolError(
-              "Refusing this replace: it would drop IAMPolicyManager and/or IAMApplicationManager from a policy " +
-                "that currently grants them. That would permanently lock out IAM management for whoever this " +
-                "policy currently grants it to. Include those permission sets in the replacement array.",
-            );
-          }
+        const droppedOrgScoped = LOCKOUT_PERMISSION_SETS.filter((name) => {
+          const currentOrgIds = currentOrgIdsForLockoutGrant(currentRules, name);
+          if (currentOrgIds.length === 0) return false;
+          const allowedOrganizationIds = new Set([...currentOrgIds, config.SCW_ORGANIZATION_ID]);
+          return !hasOrgScopedLockoutGrant(rules, name, allowedOrganizationIds);
+        });
+        if (droppedOrgScoped.length > 0) {
+          const names = droppedOrgScoped.join(" and ");
+          return toolError(
+            `Refusing this replace: it would drop org-wide ${names} (organization_id scope) from a policy ` +
+              `that currently grants ${droppedOrgScoped.length === 1 ? "it" : "them"}. Keeping the name on a ` +
+              `project-scoped (project_ids) rule does not keep the grant - include ${names} on a rule with ` +
+              `organization_id set to this organization. Dropping org-wide IAM management would permanently ` +
+              `lock out IAM for whoever this policy currently grants it to.`,
+          );
         }
         const data = await iamRequest<{ rules: Rule[] }>(config, "PUT", `/rules`, { policy_id, rules });
         return toolJsonResult(data, config.MAX_OUTPUT_CHARS);
@@ -360,7 +396,7 @@ export function registerPolicies(server: McpServer, config: Config) {
     async ({ policy_id }) =>
       withIamErrorHandling(async () => {
         const currentRules = await iamListAll<Rule>(config, `/rules?policy_id=${policy_id}`, "rules");
-        if (grantsIamManagement(currentRules)) {
+        if (grantsIamManagement(currentRules, config.SCW_ORGANIZATION_ID)) {
           return toolError(
             "Refusing this delete: this policy currently grants IAMPolicyManager and/or IAMApplicationManager. " +
               "That would permanently lock out IAM management for whoever this policy currently grants it to. " +
