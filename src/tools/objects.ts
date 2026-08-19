@@ -178,12 +178,8 @@ export function registerObjects(server: McpServer, config: Config) {
     async ({ bucket, region, key }) =>
       handleS3(async () => {
         const client = getS3Client(config, region);
-        const res = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-        let sizeBytes = res.ContentLength;
-        if (sizeBytes === undefined) {
-          const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-          sizeBytes = head.ContentLength;
-        }
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+        const sizeBytes = head.ContentLength;
         if (sizeBytes === undefined) {
           return toolError(
             "Object size could not be determined. Use scaleway_s3_generate_presigned_url or scaleway_s3_head_object.",
@@ -192,6 +188,15 @@ export function registerObjects(server: McpServer, config: Config) {
         if (sizeBytes > config.MAX_GET_OBJECT_BYTES) {
           return toolError(
             `Object is ${sizeBytes} bytes, over the ${config.MAX_GET_OBJECT_BYTES}-byte ceiling (MAX_GET_OBJECT_BYTES). ` +
+              "Use scaleway_s3_generate_presigned_url instead.",
+          );
+        }
+        const res = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+        if (res.ContentLength !== undefined && res.ContentLength > config.MAX_GET_OBJECT_BYTES) {
+          const body = res.Body as { destroy?: () => void } | undefined;
+          body?.destroy?.();
+          return toolError(
+            `Object is ${res.ContentLength} bytes, over the ${config.MAX_GET_OBJECT_BYTES}-byte ceiling (MAX_GET_OBJECT_BYTES). ` +
               "Use scaleway_s3_generate_presigned_url instead.",
           );
         }
