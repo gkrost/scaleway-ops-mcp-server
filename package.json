@@ -7,8 +7,15 @@
   "bin": {
     "scaleway-ops-mcp-server": "dist/index.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "build": "tsc && node -e \"require('fs').chmodSync('dist/index.js', 0o755)\"",
+    "prepublishOnly": "npm run build",
     "dev": "tsc --watch",
     "start": "node dist/index.js"
   },
@@ -22,6 +29,14 @@
   ],
   "author": "Gernot Krost <gernot@krost.org>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/logic-arts-official/scaleway-ops-mcp-server.git"
+  },
+  "homepage": "https://github.com/logic-arts-official/scaleway-ops-mcp-server#readme",
+  "bugs": {
+    "url": "https://github.com/logic-arts-official/scaleway-ops-mcp-server/issues"
+  },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1108.0",
     "@aws-sdk/s3-request-presigner": "^3.1112.0",
