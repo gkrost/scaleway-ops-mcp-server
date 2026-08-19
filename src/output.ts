@@ -14,11 +14,23 @@ export function toolResult(text: string, maxChars: number): CallToolResult {
   };
 }
 
-/** Build a successful CallToolResult carrying structured JSON, mirrored as text. */
+/** Build a successful CallToolResult carrying structured JSON, mirrored as text.
+ * When the untruncated JSON exceeds maxChars, structuredContent carries a truncation
+ * marker instead of the real data - never the field silently missing - so a caller
+ * that reads structuredContent (rather than parsing the text mirror) gets an explicit,
+ * typed signal that it was cut, instead of something indistinguishable from "no
+ * structured content for this tool". */
 export function toolJsonResult(data: unknown, maxChars: number): CallToolResult {
+  const text = JSON.stringify(data, null, 2);
+  const truncated = text.length > maxChars;
   return {
-    content: [{ type: "text", text: truncate(JSON.stringify(data, null, 2), maxChars) }],
-    structuredContent: data as Record<string, unknown>,
+    content: [{ type: "text", text: truncate(text, maxChars) }],
+    structuredContent: truncated
+      ? {
+          truncated: true,
+          note: `Response exceeds MAX_OUTPUT_CHARS (${maxChars} chars) - structuredContent omitted; see the truncated JSON in the text content instead.`,
+        }
+      : (data as Record<string, unknown>),
   };
 }
 

@@ -745,5 +745,43 @@ const groupsAfter = expectJson(await client.callTool({ name: "scaleway_iam_list_
 if (groupsAfter.groups.some((g) => g.id === createdGroupId)) throw new Error("throwaway group still present after delete");
 console.log(`verify gone: throwaway group no longer in list_groups (back to ${groupsAfter.total_count}, zero residue)`);
 
+console.log("\n=== OUTPUT TRUNCATION (issue #47): structuredContent replaced with a marker over MAX_OUTPUT_CHARS ===");
+{
+  // Separate short-lived client/server pair with a deliberately tiny MAX_OUTPUT_CHARS, so any
+  // JSON-returning tool call is guaranteed to exceed the ceiling regardless of live account size.
+  const tinyTransport = new StdioClientTransport({
+    command: "node",
+    args: [join(repoRoot, "dist/index.js")],
+    env: {
+      SCW_ACCESS_KEY: creds.SCW_ACCESS_KEY,
+      SCW_SECRET_KEY: creds.SCW_SECRET_KEY,
+      SCW_ORGANIZATION_ID: creds.SCW_ORGANIZATION_ID,
+      SCW_PROJECT_ID: creds.SCW_PROJECT_ID,
+      MAX_OUTPUT_CHARS: "10",
+    },
+  });
+  const tinyClient = new Client({ name: "smoke-test-client-tiny-output", version: "0.0.1" });
+  await tinyClient.connect(tinyTransport);
+  try {
+    const res = await tinyClient.callTool({ name: "scaleway_iam_list_applications", arguments: {} });
+    if (res.isError) { console.error("FAILED at truncation probe:", text(res)); process.exit(1); }
+    if (!text(res).includes("[... truncated")) {
+      console.error("FAILED: text content missing truncation notice:", text(res).slice(0, 200));
+      process.exit(1);
+    }
+    if (res.structuredContent?.truncated !== true) {
+      console.error("FAILED: structuredContent is not the { truncated: true } marker:", JSON.stringify(res.structuredContent));
+      process.exit(1);
+    }
+    console.log("guard ok (over MAX_OUTPUT_CHARS): text carries a truncation notice, structuredContent =", JSON.stringify(res.structuredContent));
+  } finally {
+    await tinyClient.close();
+  }
+}
+// Non-truncated path stays a plain passthrough: the very first call this script made
+// (list_applications, filtered) returned real structuredContent under the default 25000 ceiling.
+if (apps.structuredContent?.truncated) { console.error("FAILED: default-ceiling call was unexpectedly marked truncated"); process.exit(1); }
+console.log("guard ok (under MAX_OUTPUT_CHARS): structuredContent is the real data, no truncation marker");
+
 await client.close();
 console.log("\nDONE - full read/write/delete lifecycle verified (applications, API keys, buckets, objects, ssh keys, groups)");

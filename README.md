@@ -31,7 +31,7 @@ Environment variables (see `.env.example`):
 | `SCW_ORGANIZATION_ID` | yes | Organization these operations run in. |
 | `SCW_PROJECT_ID` | yes | Default Project (used as `default_project_id` when creating API keys, and wherever a Project id is needed but not explicitly passed). |
 | `SCW_DEFAULT_REGION` | no (default `fr-par`) | Region for Bucket Policy calls when a tool call doesn't specify one. |
-| `MAX_OUTPUT_CHARS` | no (default `25000`) | Truncation limit for tool responses. |
+| `MAX_OUTPUT_CHARS` | no (default `25000`) | Truncation limit for tool response text; `structuredContent` is replaced with a `{ truncated: true, note }` marker when the untruncated JSON exceeds the ceiling. |
 | `MAX_PUT_OBJECT_BYTES` | no (default `5000000`) | Decoded-size ceiling for `scaleway_s3_put_object` - single-part only, multipart is out of scope. |
 | `MAX_GET_OBJECT_BYTES` | no (default `5000000`) | Decoded-size ceiling for `scaleway_s3_get_object` - larger objects should use `scaleway_s3_generate_presigned_url`. |
 
