@@ -210,7 +210,8 @@ creating a job against an empty throwaway bucket produced six daily log objects
 does not delete already-exported objects (by design, matching every other delete tool in this
 server), so a bucket created purely to test an export job will NOT be empty afterward -
 `scaleway_s3_delete_bucket` fails `BucketNotEmpty` until those objects are removed, which needs a
-raw S3 call since object-level operations are out of this server's scope.
+raw S3 call since object-level operations are out of this server's scope. The tool now requires
+`confirm=true`.
 
 ## Preconfigured alert rules start all-disabled, and the two write tools differ in blast radius
 
