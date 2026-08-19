@@ -162,6 +162,22 @@ replace that would drop `IAMPolicyManager` or `IAMApplicationManager` from a pol
 has them. Policies that never carried those permission sets are unaffected. `delete_policy` now
 refuses the same class of lockout even with `confirm=true`.
 
+### `delete_policy`'s own guard does not cover deleting the policy's principal instead
+
+`delete_policy` and `set_policy_rules` both refuse to touch a policy that currently grants
+`IAMPolicyManager`/`IAMApplicationManager` - but neither is the only way to strip that grant.
+`delete_application`'s own description already says it "detaches every policy scoped to it" -
+DETACHES, not deletes - and `delete_group` documents the identical consequence for a Policy naming
+that group's `group_id`. Deleting the Application/Group that holds an IAM-management policy
+orphans that policy (its `application_id`/`group_id` goes back to unset) without ever calling
+`delete_policy` or `set_policy_rules`, so neither guard fires - the exact same lockout, reached
+through the principal instead of the policy. Both `delete_application` and `delete_group` now list
+the org's policies, filter to ones attached to that principal, and refuse (even with `confirm=true`)
+if any of them grant IAM management - same `grantsIamManagement` check `delete_policy` uses,
+shared via `findIamManagementPoliciesFor` in `policies.ts`. `delete_user` is not covered: a User is
+never this server's own principal (that's always an Application), and the existing owner-account
+refusal already blocks the one clearly catastrophic case.
+
 ## `POST /policies/{id}/clone` ignores its request body and always returns the clone unattached
 
 Confirmed empirically 2026-08-18, reviewing `scaleway_iam_clone_policy`: the clone endpoint copies

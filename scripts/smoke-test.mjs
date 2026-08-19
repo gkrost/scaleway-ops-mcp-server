@@ -714,7 +714,11 @@ try {
         name: `mcp-smoke-test-group-policy-${Date.now()}`,
         description: "smoke-test - safe to delete",
         group_id: createdGroupId,
-        rules: [{ permission_set_names: ["IAMPolicyManager"], organization_id: creds.SCW_ORGANIZATION_ID }],
+        // AuditTrailReadOnly, not IAMPolicyManager/IAMApplicationManager: this rule only needs to exercise
+        // the group_id principal path, and since #43 delete_policy refuses to delete a policy that grants IAM
+        // management (by design - see docs/gotchas.md), using IAMPolicyManager here would make the cleanup a
+        // few lines down permanently fail, leaking this throwaway policy into the live account on every run.
+        rules: [{ permission_set_names: ["AuditTrailReadOnly"], organization_id: creds.SCW_ORGANIZATION_ID }],
       },
     }),
     "create_policy (group_id principal)",

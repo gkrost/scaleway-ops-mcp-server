@@ -11,9 +11,40 @@ interface Rule {
   organization_id?: string;
 }
 
-function grantsIamManagement(rules: Rule[]): boolean {
+export function grantsIamManagement(rules: Rule[]): boolean {
   const names = new Set(rules.flatMap((r) => r.permission_set_names));
   return names.has("IAMPolicyManager") || names.has("IAMApplicationManager");
+}
+
+export interface IamManagementPolicyRef {
+  id: string;
+  name: string;
+}
+
+/**
+ * Policies attached to the given principal (application_id/user_id/group_id) that currently grant
+ * IAMPolicyManager/IAMApplicationManager. delete_policy (below) refuses to delete such a policy directly,
+ * but Scaleway detaches - does not delete - a policy when its principal (Application/Group/User) is
+ * deleted instead, so that same lockout is reachable through delete_application/delete_group without ever
+ * going through delete_policy's guard. Callers that delete a principal should check this first.
+ */
+export async function findIamManagementPoliciesFor(
+  config: Config,
+  principal: { application_id?: string; user_id?: string; group_id?: string },
+): Promise<IamManagementPolicyRef[]> {
+  const all = await iamListAll<Policy>(config, `/policies?organization_id=${config.SCW_ORGANIZATION_ID}`, "policies");
+  const attached = all.filter(
+    (p) =>
+      (principal.application_id !== undefined && p.application_id === principal.application_id) ||
+      (principal.user_id !== undefined && p.user_id === principal.user_id) ||
+      (principal.group_id !== undefined && p.group_id === principal.group_id),
+  );
+  const flagged: IamManagementPolicyRef[] = [];
+  for (const p of attached) {
+    const rules = await iamListAll<Rule>(config, `/rules?policy_id=${p.id}`, "rules");
+    if (grantsIamManagement(rules)) flagged.push({ id: p.id, name: p.name });
+  }
+  return flagged;
 }
 
 interface Policy {
