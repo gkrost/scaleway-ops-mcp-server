@@ -36,6 +36,12 @@ const putSchema = {
         "the relevant permission sets is required in addition to this bucket policy - a Bucket Policy alone is " +
         "not sufficient on Scaleway.",
     ),
+  confirm: z
+    .literal(true)
+    .describe(
+      "Must be explicitly true. This replaces the entire bucket policy - a document granting Principal * or " +
+        "omitting the caller's own access takes effect immediately.",
+    ),
 };
 
 const deleteSchema = {
@@ -76,7 +82,7 @@ export function registerBucketPolicies(server: McpServer, config: Config) {
     {
       title: "Set Scaleway Bucket Policy",
       description:
-        "Replace a bucket's entire Bucket Policy with the given JSON document. This is the bucket-scoped half of " +
+        "Replace a bucket's entire Bucket Policy with the given JSON document. Requires confirm=true. This is the bucket-scoped half of " +
         "access control - see scaleway_iam_create_policy's description for why both an IAM Policy and a Bucket " +
         "Policy are needed together. Recommended safety net: include a statement granting the bucket owner's own " +
         "user_id full access (mirrors the console's 'Maintain access to bucket' checkbox) so a mistake here can " +
@@ -84,7 +90,7 @@ export function registerBucketPolicies(server: McpServer, config: Config) {
       inputSchema: putSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ bucket, region, policy_json }) => {
+    async ({ bucket, region, policy_json, confirm }) => {
       if (!isValidJson(policy_json)) {
         return toolError("policy_json is not valid JSON - check for a missing/extra brace or comma before sending.");
       }

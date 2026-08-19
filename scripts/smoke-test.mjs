@@ -384,6 +384,7 @@ try {
   if (vis0.visibility !== "private") { console.error("FAILED: new bucket not private"); process.exit(1); }
   await expectError("scaleway_s3_set_bucket_visibility", { bucket: cfgBucket, visibility: "public-read" }, "public without confirm rejected");
   await expectError("scaleway_s3_generate_presigned_url", { bucket: cfgBucket, key: "probe.txt", operation: "put" }, "presigned put without confirm rejected");
+  await expectError("scaleway_s3_put_bucket_policy", { bucket: cfgBucket, policy_json: "{\"Version\":\"2023-04-17\",\"Statement\":[]}" }, "put_bucket_policy without confirm rejected");
   console.log("visibility public:", text(await client.callTool({ name: "scaleway_s3_set_bucket_visibility", arguments: { bucket: cfgBucket, visibility: "public-read", confirm: true } })).slice(0, 80));
   const vis1 = expectJson(await client.callTool({ name: "scaleway_s3_get_bucket_visibility", arguments: { bucket: cfgBucket } }), "get visibility public");
   if (vis1.visibility !== "public") { console.error("FAILED: visibility not public after set"); process.exit(1); }
