@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Config } from "../config.js";
 import { iamListAll, iamRequest, withIamErrorHandling } from "../iamClient.js";
 import { toolJsonResult, toolError } from "../output.js";
+import { findIamManagementPoliciesFor } from "./policies.js";
 
 /**
  * IAM Groups (issue #5) - completes the group_id principal loop policies.ts already accepts.
@@ -189,7 +190,9 @@ export function registerGroups(server: McpServer, config: Config) {
         "PERMANENTLY delete a Group. Requires confirm=true. IRREVERSIBLE: any Policy granting access via this " +
         "group's group_id stops applying to its former members immediately - anyone relying solely on this " +
         "group's grants loses that access. Refuses Scaleway-managed/special groups (all_users/all_applications) " +
-        "tool-side - fetches the group first to check.",
+        "tool-side - fetches the group first to check. Also refused (even with confirm=true) if a policy attached " +
+        "to this group currently grants IAMPolicyManager/IAMApplicationManager, since deleting the group detaches " +
+        "that policy rather than deleting it, silently stripping the IAM-management grant from whoever holds it.",
       inputSchema: { group_id: groupIdField, confirm: confirmField },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
@@ -198,6 +201,18 @@ export function registerGroups(server: McpServer, config: Config) {
         const current = await iamRequest<Group>(config, "GET", `/groups/${group_id}`);
         const refusal = refuseIfSpecial(current, "delete", { needDeletable: true });
         if (refusal) return toolError(refusal);
+        const blocking = await findIamManagementPoliciesFor(config, { group_id });
+        if (blocking.length > 0) {
+          return toolError(
+            `Refusing this delete: ${blocking.length} attached polic${blocking.length === 1 ? "y" : "ies"} ` +
+              `(${blocking.map((p) => p.name).join(", ")}) currently grant${blocking.length === 1 ? "s" : ""} ` +
+              "IAMPolicyManager and/or IAMApplicationManager. Deleting this Group detaches those policies " +
+              "(Scaleway does not delete them) rather than revoking them, which would strip that IAM-management " +
+              "grant from whoever holds it. This is refused even with confirm=true. Move the policy to a " +
+              "different principal first, or change its rules with scaleway_iam_set_policy_rules before " +
+              "deleting this Group.",
+          );
+        }
         await iamRequest<void>(config, "DELETE", `/groups/${group_id}`);
         return toolJsonResult({ deleted: true, group_id }, config.MAX_OUTPUT_CHARS);
       }),

@@ -2,7 +2,8 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Config } from "../config.js";
 import { iamListAll, iamRequest, withIamErrorHandling } from "../iamClient.js";
-import { toolJsonResult } from "../output.js";
+import { toolJsonResult, toolError } from "../output.js";
+import { findIamManagementPoliciesFor } from "./policies.js";
 
 interface Application {
   id: string;
@@ -150,12 +151,27 @@ export function registerApplications(server: McpServer, config: Config) {
       description:
         "PERMANENTLY delete an IAM Application: also deletes every API key it holds and detaches every policy scoped to it. " +
         "Any credential still deployed somewhere (e.g. in a host's .env.prod) stops authenticating immediately and irreversibly. " +
-        "Requires confirm=true.",
+        "Requires confirm=true. Refused (even with confirm=true) if a policy attached to this Application currently " +
+        "grants IAMPolicyManager/IAMApplicationManager: deleting the Application DETACHES that policy rather than " +
+        "deleting it, which would silently strip the IAM-management grant from whoever holds it - including this " +
+        "server, if this is its own Application - without ever going through scaleway_iam_delete_policy's own guard.",
       inputSchema: deleteSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     async ({ application_id }) =>
       withIamErrorHandling(async () => {
+        const blocking = await findIamManagementPoliciesFor(config, { application_id });
+        if (blocking.length > 0) {
+          return toolError(
+            `Refusing this delete: ${blocking.length} attached polic${blocking.length === 1 ? "y" : "ies"} ` +
+              `(${blocking.map((p) => p.name).join(", ")}) currently grant${blocking.length === 1 ? "s" : ""} ` +
+              "IAMPolicyManager and/or IAMApplicationManager. Deleting this Application detaches those policies " +
+              "(Scaleway does not delete them) rather than revoking them, which would strip that IAM-management " +
+              "grant from whoever holds it - including this server, if this is its own Application. This is " +
+              "refused even with confirm=true. Move the policy to a different principal first, or change its " +
+              "rules with scaleway_iam_set_policy_rules before deleting this Application.",
+          );
+        }
         await iamRequest<void>(config, "DELETE", `/applications/${application_id}`);
         return toolJsonResult({ deleted: true, application_id }, config.MAX_OUTPUT_CHARS);
       }),

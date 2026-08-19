@@ -11,6 +11,42 @@ interface Rule {
   organization_id?: string;
 }
 
+export function grantsIamManagement(rules: Rule[]): boolean {
+  const names = new Set(rules.flatMap((r) => r.permission_set_names));
+  return names.has("IAMPolicyManager") || names.has("IAMApplicationManager");
+}
+
+export interface IamManagementPolicyRef {
+  id: string;
+  name: string;
+}
+
+/**
+ * Policies attached to the given principal (application_id/user_id/group_id) that currently grant
+ * IAMPolicyManager/IAMApplicationManager. delete_policy (below) refuses to delete such a policy directly,
+ * but Scaleway detaches - does not delete - a policy when its principal (Application/Group/User) is
+ * deleted instead, so that same lockout is reachable through delete_application/delete_group without ever
+ * going through delete_policy's guard. Callers that delete a principal should check this first.
+ */
+export async function findIamManagementPoliciesFor(
+  config: Config,
+  principal: { application_id?: string; user_id?: string; group_id?: string },
+): Promise<IamManagementPolicyRef[]> {
+  const all = await iamListAll<Policy>(config, `/policies?organization_id=${config.SCW_ORGANIZATION_ID}`, "policies");
+  const attached = all.filter(
+    (p) =>
+      (principal.application_id !== undefined && p.application_id === principal.application_id) ||
+      (principal.user_id !== undefined && p.user_id === principal.user_id) ||
+      (principal.group_id !== undefined && p.group_id === principal.group_id),
+  );
+  const flagged: IamManagementPolicyRef[] = [];
+  for (const p of attached) {
+    const rules = await iamListAll<Rule>(config, `/rules?policy_id=${p.id}`, "rules");
+    if (grantsIamManagement(rules)) flagged.push({ id: p.id, name: p.name });
+  }
+  return flagged;
+}
+
 interface Policy {
   id: string;
   name: string;
@@ -122,7 +158,13 @@ const setRulesSchema = {
 
 const deleteSchema = {
   policy_id: z.string().uuid(),
-  confirm: z.literal(true).describe("Must be explicitly true. Deleting a policy immediately revokes every permission it granted."),
+  confirm: z
+    .literal(true)
+    .describe(
+      "Must be explicitly true. Deleting a policy immediately revokes every permission it granted. " +
+        "Not sufficient if the policy currently grants IAMPolicyManager/IAMApplicationManager - those " +
+        "deletes are refused even with confirm=true.",
+    ),
 };
 
 export function registerPolicies(server: McpServer, config: Config) {
@@ -283,17 +325,19 @@ export function registerPolicies(server: McpServer, config: Config) {
     async ({ policy_id, rules, confirm }) =>
       withIamErrorHandling(async () => {
         const currentRules = await iamListAll<Rule>(config, `/rules?policy_id=${policy_id}`, "rules");
-        const currentSets = new Set(currentRules.flatMap((r) => r.permission_set_names));
-        const incomingSets = new Set(rules.flatMap((r) => r.permission_set_names));
-        const droppingPolicyManager = currentSets.has("IAMPolicyManager") && !incomingSets.has("IAMPolicyManager");
-        const droppingApplicationManager =
-          currentSets.has("IAMApplicationManager") && !incomingSets.has("IAMApplicationManager");
-        if (droppingPolicyManager || droppingApplicationManager) {
-          return toolError(
-            "Refusing this replace: it would drop IAMPolicyManager and/or IAMApplicationManager from a policy " +
-              "that currently grants them. That would permanently lock out IAM management for whoever this " +
-              "policy currently grants it to. Include those permission sets in the replacement array.",
-          );
+        if (grantsIamManagement(currentRules)) {
+          const currentSets = new Set(currentRules.flatMap((r) => r.permission_set_names));
+          const incomingSets = new Set(rules.flatMap((r) => r.permission_set_names));
+          const droppingPolicyManager = currentSets.has("IAMPolicyManager") && !incomingSets.has("IAMPolicyManager");
+          const droppingApplicationManager =
+            currentSets.has("IAMApplicationManager") && !incomingSets.has("IAMApplicationManager");
+          if (droppingPolicyManager || droppingApplicationManager) {
+            return toolError(
+              "Refusing this replace: it would drop IAMPolicyManager and/or IAMApplicationManager from a policy " +
+                "that currently grants them. That would permanently lock out IAM management for whoever this " +
+                "policy currently grants it to. Include those permission sets in the replacement array.",
+            );
+          }
         }
         const data = await iamRequest<{ rules: Rule[] }>(config, "PUT", `/rules`, { policy_id, rules });
         return toolJsonResult(data, config.MAX_OUTPUT_CHARS);
@@ -304,12 +348,25 @@ export function registerPolicies(server: McpServer, config: Config) {
     "scaleway_iam_delete_policy",
     {
       title: "Delete Scaleway IAM Policy",
-      description: "PERMANENTLY delete an IAM Policy. Requires confirm=true. Every permission it granted is revoked immediately.",
+      description:
+        "PERMANENTLY delete an IAM Policy. Requires confirm=true. Every permission it granted is revoked immediately. " +
+        "confirm=true is not enough if the policy currently grants IAMPolicyManager/IAMApplicationManager: that " +
+        "delete is refused even with confirm, because it would permanently lock out IAM management for whoever " +
+        "this policy currently grants it to (including this server, if this is its own IAM policy). Change the " +
+        "rules first with scaleway_iam_set_policy_rules, or leave the policy in place.",
       inputSchema: deleteSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     async ({ policy_id }) =>
       withIamErrorHandling(async () => {
+        const currentRules = await iamListAll<Rule>(config, `/rules?policy_id=${policy_id}`, "rules");
+        if (grantsIamManagement(currentRules)) {
+          return toolError(
+            "Refusing this delete: this policy currently grants IAMPolicyManager and/or IAMApplicationManager. " +
+              "That would permanently lock out IAM management for whoever this policy currently grants it to. " +
+              "This is refused even with confirm=true. Change the rules first (or this is the server's own IAM policy).",
+          );
+        }
         await iamRequest<void>(config, "DELETE", `/policies/${policy_id}`);
         return toolJsonResult({ deleted: true, policy_id }, config.MAX_OUTPUT_CHARS);
       }),
