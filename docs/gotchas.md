@@ -150,6 +150,17 @@ itself fail `permissions_denied`, since the credential attempting it no longer h
 that call requires. `SetRules` has no such window: the policy object, and everything that already
 depends on its `id`, never stops existing.
 
+### Distinct lockout: a successful full-replace that omits the IAM-management rule
+
+`set_policy_rules` has a second lockout mode of its own. The PUT is a complete replace, not a
+merge: if the caller reconstructs `rules` from a stale or incomplete `list_policy_rules` read and
+omits the rule granting `IAMPolicyManager`/`IAMApplicationManager`, the call used to succeed
+immediately - and whoever that policy granted IAM management to (including this server) was then
+permanently unable to call `set_policy_rules` or any other IAM policy/application tool to undo it.
+The tool now requires `confirm=true`, and the handler GETs the current rules first and refuses a
+replace that would drop `IAMPolicyManager` or `IAMApplicationManager` from a policy that currently
+has them. Policies that never carried those permission sets are unaffected.
+
 ## `POST /policies/{id}/clone` ignores its request body and always returns the clone unattached
 
 Confirmed empirically 2026-08-18, reviewing `scaleway_iam_clone_policy`: the clone endpoint copies

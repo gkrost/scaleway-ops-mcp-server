@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Config } from "../config.js";
 import { iamListAll, iamRequest, withIamErrorHandling } from "../iamClient.js";
-import { toolJsonResult } from "../output.js";
+import { toolJsonResult, toolError } from "../output.js";
 
 interface Rule {
   id: string;
@@ -111,6 +111,12 @@ const setRulesSchema = {
         "append. Call scaleway_iam_list_policy_rules first, add/remove/edit within that array, then pass the " +
         "whole thing back here. This is the safe way to change a live policy's grants: unlike delete+recreate, " +
         "there's no window where the policy (or the permissions it grants its own holder) doesn't exist.",
+    ),
+  confirm: z
+    .literal(true)
+    .describe(
+      "Must be explicitly true. This is a full-replace of live grants: omitting the rule that grants this " +
+        "server IAMPolicyManager/IAMApplicationManager permanently locks the credential out of IAM.",
     ),
 };
 
@@ -264,15 +270,31 @@ export function registerPolicies(server: McpServer, config: Config) {
       title: "Set rules on a Scaleway IAM Policy",
       description:
         "Overwrite the COMPLETE rules array on an existing Policy in one atomic call - the safe way to add or " +
-        "remove a permission set on a live policy. Prefer this over delete+recreate: deleting a policy that " +
-        "grants its own holder IAMPolicyManager revokes that permission the instant it's deleted, before a " +
-        "replacement can be created, which can lock the credential you're using out of IAM entirely. Call " +
+        "remove a permission set on a live policy. Requires confirm=true. Prefer this over delete+recreate: " +
+        "deleting a policy that grants its own holder IAMPolicyManager revokes that permission the instant " +
+        "it's deleted, before a replacement can be created, which can lock the credential you're using out of " +
+        "IAM entirely. Distinct lockout mode: a successful replace that drops this server's IAM-management " +
+        "rule (IAMPolicyManager/IAMApplicationManager) cannot be undone through this server - the credential " +
+        "then cannot call this tool, or any other IAM policy/application tool, to fix itself. Call " +
         "scaleway_iam_list_policy_rules first to get the current array before changing it.",
       inputSchema: setRulesSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ policy_id, rules }) =>
+    async ({ policy_id, rules, confirm }) =>
       withIamErrorHandling(async () => {
+        const current = await iamRequest<{ rules: Rule[]; total_count: number }>(config, "GET", `/rules?policy_id=${policy_id}`);
+        const currentSets = new Set((current.rules ?? []).flatMap((r) => r.permission_set_names));
+        const incomingSets = new Set(rules.flatMap((r) => r.permission_set_names));
+        const droppingPolicyManager = currentSets.has("IAMPolicyManager") && !incomingSets.has("IAMPolicyManager");
+        const droppingApplicationManager =
+          currentSets.has("IAMApplicationManager") && !incomingSets.has("IAMApplicationManager");
+        if (droppingPolicyManager || droppingApplicationManager) {
+          return toolError(
+            "Refusing this replace: it would drop IAMPolicyManager and/or IAMApplicationManager from a policy " +
+              "that currently grants them. That would permanently lock out IAM management for whoever this " +
+              "policy currently grants it to. Include those permission sets in the replacement array.",
+          );
+        }
         const data = await iamRequest<{ rules: Rule[] }>(config, "PUT", `/rules`, { policy_id, rules });
         return toolJsonResult(data, config.MAX_OUTPUT_CHARS);
       }),
