@@ -489,7 +489,8 @@ const bogusPassword = await client.callTool({
   arguments: { user_id: bogusId, password: "Xy9!mQ2#kL7%pR4z", confirm: true },
 });
 if (!bogusPassword.isError || !text(bogusPassword).includes("resource is not found")) {
-  console.error(`FAILED: update_user_password did not surface the expected bogus-id 404 (password body likely not sent): ${text(bogusPassword).slice(0, 100)}`);
+  // Do not render the API response: it can include the password supplied above.
+  console.error("FAILED: update_user_password did not surface the expected bogus-id 404 (password body likely not sent)");
   process.exit(1);
 }
 console.log("api err ok (password bogus id): password reached the API and the id lookup 404'd, as expected");
