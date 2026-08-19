@@ -18,7 +18,7 @@ All notable changes to this project are documented here.
 - Mark `scaleway_s3_put_bucket_tagging` as `destructiveHint: true` so MCP clients confirm the full-replace tag write (#31).
 
 - `scaleway_s3_put_bucket_policy` now requires `confirm=true` because it replaces the entire bucket policy in one shot and can grant `Principal *` or drop the caller's own access (#46).
-- `toolJsonResult` omits `structuredContent` when the untruncated pretty JSON exceeds `MAX_OUTPUT_CHARS`, so large list responses are actually bounded by the truncated text (#47).
+- `toolJsonResult` replaces `structuredContent` with an explicit `{ truncated: true, note }` marker when the untruncated pretty JSON exceeds `MAX_OUTPUT_CHARS`, so large list responses are actually bounded by the truncated text and a caller reading `structuredContent` gets an unambiguous signal instead of a silently missing field (#47).
 
 ## 0.1.1
 
