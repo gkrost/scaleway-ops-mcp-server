@@ -449,7 +449,8 @@ try {
   const enc = expectJson(await client.callTool({ name: "scaleway_s3_get_bucket_encryption", arguments: { bucket: cfgBucket } }), "get_bucket_encryption");
   if (!enc.rules?.some((r) => r.algorithm === "AES256")) { console.error("FAILED: encryption echo mismatch"); process.exit(1); }
   console.log("encryption get: AES256 echoed");
-  console.log("encryption delete:", text(await client.callTool({ name: "scaleway_s3_delete_bucket_encryption", arguments: { bucket: cfgBucket } })).slice(0, 80));
+  await expectError("scaleway_s3_delete_bucket_encryption", { bucket: cfgBucket }, "delete_bucket_encryption without confirm rejected");
+  console.log("encryption delete:", text(await client.callTool({ name: "scaleway_s3_delete_bucket_encryption", arguments: { bucket: cfgBucket, confirm: true } })).slice(0, 80));
 
   // --- object lock (one-way; this throwaway bucket is deleted right after) ---
   // Suspend versioning first so the instructive-error path below is actually reachable.
