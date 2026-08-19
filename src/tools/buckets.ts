@@ -4,9 +4,10 @@ import { CreateBucketCommand, DeleteBucketCommand, ListBucketsCommand } from "@a
 import type { Config } from "../config.js";
 import { getS3Client, handleS3 } from "../s3Client.js";
 import { toolJsonResult } from "../output.js";
+import { scwRegionSchema } from "../scwRegion.js";
 
 const bucketField = z.string().min(3).describe("Bucket name, e.g. 'payments-backups'.");
-const regionField = z.string().optional().describe("Region to operate in. Defaults to the server's configured region (fr-par).");
+const regionField = scwRegionSchema.optional().describe("Region to operate in. Defaults to the server's configured region (fr-par).");
 
 const createSchema = {
   bucket: bucketField,

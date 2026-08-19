@@ -8,6 +8,7 @@ All notable changes to this project are documented here.
 - `scaleway_iam_set_policy_rules` now requires `confirm=true` and refuses a full-replace that would drop `IAMPolicyManager`/`IAMApplicationManager` from a policy that currently grants them, so a stale or incomplete rules array cannot permanently lock this credential out of IAM (issue #25).
 - `scaleway_s3_generate_presigned_url`: `operation: "put"` now requires `confirm=true` and the tool is no longer annotated `readOnlyHint` - a PUT URL exports a time-limited unauthenticated write capability outside the MCP boundary (issue #26).
 - `scaleway_audit_create_export_job` now requires `confirm=true` because creation immediately backfills ~6 days of real audit events into the destination bucket, and `scaleway_audit_delete_export_job` does not remove those objects (#27).
+- Validate S3 `region` as `fr-par`/`nl-ams`/`pl-waw` instead of a free-form string, so a bad region fails at schema validation rather than an uncaught DNS/TLS error (#28).
 
 ## 0.1.1
 
