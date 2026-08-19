@@ -66,6 +66,21 @@ const deleteSchema = {
   confirm: z.literal(true).describe("Must be explicitly true. Deletion is immediate and irreversible - anything using this key stops authenticating right away."),
 };
 
+/** Allow-list for list/update results. Omits `secret_key` (only returned at creation). */
+function apiKeyView(key: ApiKey) {
+  return {
+    access_key: key.access_key,
+    application_id: key.application_id ?? null,
+    user_id: key.user_id ?? null,
+    description: key.description,
+    created_at: key.created_at,
+    updated_at: key.updated_at,
+    expires_at: key.expires_at ?? null,
+    default_project_id: key.default_project_id ?? null,
+    creation_ip: key.creation_ip,
+  };
+}
+
 export function registerApiKeys(server: McpServer, config: Config) {
   server.registerTool(
     "scaleway_iam_create_api_key",
@@ -113,7 +128,7 @@ export function registerApiKeys(server: McpServer, config: Config) {
           expires_at,
           default_project_id,
         });
-        return toolJsonResult(key, config.MAX_OUTPUT_CHARS);
+        return toolJsonResult(apiKeyView(key), config.MAX_OUTPUT_CHARS);
       }),
   );
 
@@ -130,7 +145,7 @@ export function registerApiKeys(server: McpServer, config: Config) {
         const params = new URLSearchParams({ organization_id: config.SCW_ORGANIZATION_ID });
         if (application_id) params.set("application_id", application_id);
         const all = await iamListAll<ApiKey>(config, `/api-keys?${params}`, "api_keys");
-        return toolJsonResult({ total_count: all.length, count: all.length, api_keys: all }, config.MAX_OUTPUT_CHARS);
+        return toolJsonResult({ total_count: all.length, count: all.length, api_keys: all.map(apiKeyView) }, config.MAX_OUTPUT_CHARS);
       }),
   );
 
