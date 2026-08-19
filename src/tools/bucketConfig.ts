@@ -69,7 +69,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
         region: regionField,
         tags: z.array(z.object({ key: z.string().min(1), value: z.string() })).min(1).describe("The COMPLETE tag set to apply."),
       },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
     async ({ bucket, region, tags }) =>
       handleS3(async () => {

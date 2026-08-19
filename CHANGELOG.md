@@ -11,6 +11,7 @@ All notable changes to this project are documented here.
 - Validate S3 `region` as `fr-par`/`nl-ams`/`pl-waw` instead of a free-form string, so a bad region fails at schema validation rather than an uncaught DNS/TLS error (#28).
 - `scaleway_s3_get_object` fails fast when the object exceeds `MAX_GET_OBJECT_BYTES` (default 5 MB) instead of buffering it into memory (#29).
 - Warn that `scaleway_iam_update_user` tags replace the full list (#30)
+- Mark `scaleway_s3_put_bucket_tagging` as `destructiveHint: true` so MCP clients confirm the full-replace tag write (#31).
 
 ## 0.1.1
 
