@@ -170,8 +170,8 @@ export function registerObjects(server: McpServer, config: Config) {
       title: "Download an object from Scaleway Object Storage",
       description:
         "Download a single object's content and metadata. Content is returned as UTF-8 text when it round-trips " +
-        "cleanly as text, otherwise as base64 (see 'encoding' in the result). Like every tool in this server, the " +
-        "result is truncated to MAX_OUTPUT_CHARS - for large objects, use scaleway_s3_generate_presigned_url instead.",
+        "cleanly as text, otherwise as base64 (see 'encoding' in the result). Decoded size is capped " +
+        "(MAX_GET_OBJECT_BYTES, default 5 MB) - larger objects fail fast; use scaleway_s3_generate_presigned_url instead.",
       inputSchema: getObjectSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -179,6 +179,22 @@ export function registerObjects(server: McpServer, config: Config) {
       handleS3(async () => {
         const client = getS3Client(config, region);
         const res = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+        let sizeBytes = res.ContentLength;
+        if (sizeBytes === undefined) {
+          const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+          sizeBytes = head.ContentLength;
+        }
+        if (sizeBytes === undefined) {
+          return toolError(
+            "Object size could not be determined. Use scaleway_s3_generate_presigned_url or scaleway_s3_head_object.",
+          );
+        }
+        if (sizeBytes > config.MAX_GET_OBJECT_BYTES) {
+          return toolError(
+            `Object is ${sizeBytes} bytes, over the ${config.MAX_GET_OBJECT_BYTES}-byte ceiling (MAX_GET_OBJECT_BYTES). ` +
+              "Use scaleway_s3_generate_presigned_url instead.",
+          );
+        }
         const buf = await bodyToBuffer(res.Body);
         const asText = isUtf8Text(buf);
         return toolJsonResult(

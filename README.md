@@ -33,6 +33,7 @@ Environment variables (see `.env.example`):
 | `SCW_DEFAULT_REGION` | no (default `fr-par`) | Region for Bucket Policy calls when a tool call doesn't specify one. |
 | `MAX_OUTPUT_CHARS` | no (default `25000`) | Truncation limit for tool responses. |
 | `MAX_PUT_OBJECT_BYTES` | no (default `5000000`) | Decoded-size ceiling for `scaleway_s3_put_object` - single-part only, multipart is out of scope. |
+| `MAX_GET_OBJECT_BYTES` | no (default `5000000`) | Decoded-size ceiling for `scaleway_s3_get_object` - larger objects should use `scaleway_s3_generate_presigned_url`. |
 
 **The credential this server runs as needs its own IAM Policy** granting (at minimum)
 `IAMApplicationManager` + `IAMPolicyManager` (organization scope) and `ObjectStorageFullAccess`
@@ -148,7 +149,7 @@ Or from a local clone/build, useful for development or pinning to an unreleased 
 
 **Object Storage Objects** (single-part only; multipart/large-file upload is out of scope)
 - `scaleway_s3_put_object`, `scaleway_s3_get_object`, `scaleway_s3_list_objects`, `scaleway_s3_head_object`, `scaleway_s3_copy_object`, `scaleway_s3_delete_object`, `scaleway_s3_delete_objects`
-- `put_object`/`get_object` carry binary payloads as base64 (`encoding: "base64"`); decoded size is capped by `MAX_PUT_OBJECT_BYTES` (default 5 MB). `get_object` auto-detects UTF-8 text vs. binary and returns `encoding` accordingly.
+- `put_object`/`get_object` carry binary payloads as base64 (`encoding: "base64"`); decoded size is capped by `MAX_PUT_OBJECT_BYTES` / `MAX_GET_OBJECT_BYTES` respectively (default 5 MB). `get_object` auto-detects UTF-8 text vs. binary and returns `encoding` accordingly; objects over the get ceiling fail fast - use `scaleway_s3_generate_presigned_url`.
 - `scaleway_s3_get_object_tags`, `scaleway_s3_put_object_tags` (`put` replaces the whole tag set, same replace-not-merge semantics as `put_bucket_policy`)
 - `scaleway_s3_generate_presigned_url` - time-limited GET/PUT URL for handing direct object access to something outside MCP, without exposing this server's credential.
 

@@ -12,6 +12,9 @@ const configSchema = z.object({
   // model actually sends. 5 MB decoded is a deliberately conservative single-part ceiling -
   // multipart upload is out of scope (issue #8), so this is the hard limit for scaleway_s3_put_object.
   MAX_PUT_OBJECT_BYTES: z.coerce.number().int().min(1).default(5_000_000),
+  // Decoded-size ceiling for scaleway_s3_get_object; larger objects should use
+  // scaleway_s3_generate_presigned_url.
+  MAX_GET_OBJECT_BYTES: z.coerce.number().int().min(1).default(5_000_000),
 });
 
 export type Config = z.infer<typeof configSchema>;
