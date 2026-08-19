@@ -119,6 +119,7 @@ const putObjectTagsSchema = {
         "object's entire tag set, it does not merge - call scaleway_s3_get_object_tags first if you need to keep " +
         "existing tags, same replace-not-merge semantics as scaleway_s3_put_bucket_policy.",
     ),
+  confirm: z.literal(true).describe("Must be explicitly true. Replacement is immediate and does not merge (omitted tags are dropped)."),
 };
 
 const presignedUrlSchema = {
@@ -380,11 +381,11 @@ export function registerObjects(server: McpServer, config: Config) {
     "scaleway_s3_put_object_tags",
     {
       title: "Set an object's tags",
-      description: "Replace an object's entire tag set. This REPLACES, it does not merge - see the 'tags' field.",
+      description: "Replace an object's entire tag set. This REPLACES, it does not merge - see the 'tags' field. Requires confirm=true.",
       inputSchema: putObjectTagsSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ bucket, region, key, tags }) =>
+    async ({ bucket, region, key, tags, confirm }) =>
       handleS3(async () => {
         const client = getS3Client(config, region);
         await client.send(
