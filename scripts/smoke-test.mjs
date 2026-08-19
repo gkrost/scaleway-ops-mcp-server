@@ -541,6 +541,17 @@ console.log("api err ok (password bogus id): password reached the API and the id
 const badCreate = await client.callTool({ name: "scaleway_iam_create_user", arguments: { email: "not-an-email", type: "guest", confirm: true } });
 if (!badCreate.isError || !text(badCreate).includes("email")) { console.error("FAILED: invalid-email create not rejected as expected:", text(badCreate)); process.exit(1); }
 console.log("api err ok (create invalid email rejected):", text(badCreate).slice(0, 110));
+
+// Create negative-only: >10 tags must be rejected by schema validation (fires before any email is
+// sent, same as the invalid-email case above) - regression guard for the create_user .max(10) cap
+// added alongside update_user's (#50). example.invalid is an RFC 2606 reserved domain, so even if
+// this somehow reached the handler no real invitation would be deliverable.
+const tooManyTags = await client.callTool({
+  name: "scaleway_iam_create_user",
+  arguments: { email: "nobody-invalid@example.invalid", type: "guest", tags: Array.from({ length: 11 }, (_, i) => `probe-${i}`), confirm: true },
+});
+if (!tooManyTags.isError) { console.error("FAILED: create_user with 11 tags not rejected (max(10) cap):", text(tooManyTags)); process.exit(1); }
+console.log("guard ok (create_user tags over max(10) rejected):", text(tooManyTags).slice(0, 110));
 console.log("users: path-2 verification complete - reads live-verified, mutations guard+error verified, zero writes to real humans");
 
 console.log("\n=== IAM SSH KEYS / JWTs / SAML / SCIM / Security Settings (issue #6) ===");
