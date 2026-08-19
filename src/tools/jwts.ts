@@ -26,6 +26,11 @@ interface Jwt {
 
 const confirmField = z.literal(true).describe("Must be explicitly true.");
 
+const jtiField = z
+  .string()
+  .min(1)
+  .regex(/^[A-Za-z0-9-]+$/, "jti is alphanumeric/hyphen only");
+
 export function registerJwts(server: McpServer, config: Config) {
   server.registerTool(
     "scaleway_iam_list_jwts",
@@ -52,7 +57,7 @@ export function registerJwts(server: McpServer, config: Config) {
     {
       title: "Get one JWT session by id",
       description: "Read one JWT session's metadata (jti, audience, expiry, IP, user agent) by its id.",
-      inputSchema: { jti: z.string().describe("The JWT's id (jti claim), from scaleway_iam_list_jwts.") },
+      inputSchema: { jti: jtiField.describe("The JWT's id (jti claim), from scaleway_iam_list_jwts.") },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
     async ({ jti }) =>
@@ -70,7 +75,7 @@ export function registerJwts(server: McpServer, config: Config) {
         "Immediately invalidate one active browser/console session. Requires confirm=true. Whoever holds that " +
         "session is signed out right away - same severity as revoking an API key, but for an interactive login " +
         "instead of a programmatic credential.",
-      inputSchema: { jti: z.string(), confirm: confirmField },
+      inputSchema: { jti: jtiField, confirm: confirmField },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     async ({ jti }) =>

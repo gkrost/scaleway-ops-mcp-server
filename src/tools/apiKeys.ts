@@ -36,8 +36,14 @@ const createSchema = {
     .describe("Preferred Project for Object Storage operations with this key. Required if this key will call the S3-compatible API (bucket policies, objects)."),
 };
 
+const accessKeyFormat = /^[A-Za-z0-9]+$/;
+
 const updateSchema = {
-  access_key: z.string().min(1).describe("The access_key (not secret_key) of the key to update, e.g. 'SCWXXXXXXXXXXXXXXXXX'."),
+  access_key: z
+    .string()
+    .min(1)
+    .regex(accessKeyFormat, "access_key is alphanumeric only")
+    .describe("The access_key (not secret_key) of the key to update, e.g. 'SCWXXXXXXXXXXXXXXXXX'."),
   description: z.string().max(200).optional().describe("New description. Omit to leave unchanged."),
   expires_at: z
     .string()
@@ -52,7 +58,11 @@ const listSchema = {
 };
 
 const deleteSchema = {
-  access_key: z.string().min(1).describe("The access_key (not secret_key) identifying the key to delete, e.g. 'SCWXXXXXXXXXXXXXXXXX'."),
+  access_key: z
+    .string()
+    .min(1)
+    .regex(accessKeyFormat, "access_key is alphanumeric only")
+    .describe("The access_key (not secret_key) identifying the key to delete, e.g. 'SCWXXXXXXXXXXXXXXXXX'."),
   confirm: z.literal(true).describe("Must be explicitly true. Deletion is immediate and irreversible - anything using this key stops authenticating right away."),
 };
 
