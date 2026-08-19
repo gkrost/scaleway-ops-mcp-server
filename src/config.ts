@@ -4,8 +4,8 @@ import { scwRegionSchema } from "./scwRegion.js";
 const configSchema = z.object({
   SCW_SECRET_KEY: z.string().min(1, "SCW_SECRET_KEY is required"),
   SCW_ACCESS_KEY: z.string().min(1, "SCW_ACCESS_KEY is required"),
-  SCW_ORGANIZATION_ID: z.string().min(1, "SCW_ORGANIZATION_ID is required"),
-  SCW_PROJECT_ID: z.string().min(1, "SCW_PROJECT_ID is required"),
+  SCW_ORGANIZATION_ID: z.string().uuid("SCW_ORGANIZATION_ID must be a valid UUID"),
+  SCW_PROJECT_ID: z.string().uuid("SCW_PROJECT_ID must be a valid UUID"),
   SCW_DEFAULT_REGION: scwRegionSchema.default("fr-par"),
   MAX_OUTPUT_CHARS: z.coerce.number().int().min(1000).default(25000),
   // Base64 in a JSON tool call/result roughly quadruples wire size vs. raw bytes (encode + the
