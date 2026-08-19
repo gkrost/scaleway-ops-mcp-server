@@ -4,6 +4,7 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- `scripts/smoke-test.mjs` now exercises the full `put`/`get`/`delete_bucket_policy` round trip on the throwaway config bucket - previously these tools had zero coverage in this suite (every other bucket-config feature in the same file gets this treatment), despite Bucket Policies being able to grant `Principal *` (#65).
 
 - `scaleway_iam_delete_policy` now GETs current rules first and refuses the delete if the policy currently grants `IAMPolicyManager`/`IAMApplicationManager`, even with `confirm=true` (issue #43).
 - `scaleway_iam_delete_application`/`scaleway_iam_delete_group` now refuse (even with `confirm=true`) when a policy attached to that Application/Group currently grants `IAMPolicyManager`/`IAMApplicationManager`: Scaleway detaches (does not delete) a policy when its principal is deleted, so this was a second, unguarded path to the same lockout `delete_policy` refuses (issue #43 follow-up, found in review). `scripts/smoke-test.mjs`'s group_id-principal cross-check policy no longer uses `IAMPolicyManager` for this reason - it was silently failing to clean itself up under the new `delete_policy` guard.
