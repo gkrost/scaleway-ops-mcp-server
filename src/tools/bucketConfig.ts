@@ -26,6 +26,7 @@ import {
 import type { Config } from "../config.js";
 import { getS3Client, handleS3 } from "../s3Client.js";
 import { toolJsonResult, toolError } from "../output.js";
+import { scwRegionSchema } from "../scwRegion.js";
 
 /**
  * Bucket-level configuration management (issue #7): tagging, CORS, versioning, website,
@@ -35,7 +36,7 @@ import { toolJsonResult, toolError } from "../output.js";
  * Scaleway's S3 endpoint returns NotImplemented for both (live-verified 2026-08-18).
  */
 const bucketField = z.string().min(3).describe("Bucket name.");
-const regionField = z.string().optional().describe("Region to operate in. Defaults to the server's configured region (fr-par).");
+const regionField = scwRegionSchema.optional().describe("Region to operate in. Defaults to the server's configured region (fr-par).");
 const confirmField = z.literal(true).describe("Must be explicitly true.");
 
 const ALL_USERS_URI = "http://acs.amazonaws.com/groups/global/AllUsers";

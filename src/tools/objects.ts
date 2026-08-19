@@ -15,9 +15,10 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { Config } from "../config.js";
 import { getS3Client, handleS3 } from "../s3Client.js";
 import { toolJsonResult, toolError } from "../output.js";
+import { scwRegionSchema } from "../scwRegion.js";
 
 const bucketField = z.string().min(3).describe("Bucket name, e.g. 'payments-backups'.");
-const regionField = z.string().optional().describe("Region the bucket lives in. Defaults to the server's configured region (fr-par).");
+const regionField = scwRegionSchema.optional().describe("Region the bucket lives in. Defaults to the server's configured region (fr-par).");
 const keyField = z.string().min(1).describe("Object key (the full path within the bucket), e.g. 'invoices/2026-08/inv-001.pdf'.");
 
 /** URI-encode each path segment of a key but keep the '/' separators literal - required by S3's CopySource format. */

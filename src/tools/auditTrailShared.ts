@@ -2,9 +2,9 @@ import { z } from "zod";
 import type { Config } from "../config.js";
 import { AuditTrailApiError } from "../auditClient.js";
 import { toolError } from "../output.js";
+import { scwRegionSchema } from "../scwRegion.js";
 
-export const auditRegionSchema = z
-  .enum(["fr-par", "nl-ams", "pl-waw"])
+export const auditRegionSchema = scwRegionSchema
   .optional()
   .describe("Defaults to the server's configured region (fr-par).");
 
