@@ -259,8 +259,8 @@ export function registerPolicies(server: McpServer, config: Config) {
     },
     async ({ policy_id }) =>
       withIamErrorHandling(async () => {
-        const data = await iamRequest<{ rules: Rule[]; total_count: number }>(config, "GET", `/rules?policy_id=${policy_id}`);
-        return toolJsonResult(data, config.MAX_OUTPUT_CHARS);
+        const rules = await iamListAll<Rule>(config, `/rules?policy_id=${policy_id}`, "rules");
+        return toolJsonResult({ total_count: rules.length, rules }, config.MAX_OUTPUT_CHARS);
       }),
   );
 
@@ -282,8 +282,8 @@ export function registerPolicies(server: McpServer, config: Config) {
     },
     async ({ policy_id, rules, confirm }) =>
       withIamErrorHandling(async () => {
-        const current = await iamRequest<{ rules: Rule[]; total_count: number }>(config, "GET", `/rules?policy_id=${policy_id}`);
-        const currentSets = new Set((current.rules ?? []).flatMap((r) => r.permission_set_names));
+        const currentRules = await iamListAll<Rule>(config, `/rules?policy_id=${policy_id}`, "rules");
+        const currentSets = new Set(currentRules.flatMap((r) => r.permission_set_names));
         const incomingSets = new Set(rules.flatMap((r) => r.permission_set_names));
         const droppingPolicyManager = currentSets.has("IAMPolicyManager") && !incomingSets.has("IAMPolicyManager");
         const droppingApplicationManager =

@@ -454,6 +454,7 @@ for (const [name, args, label] of [
   ["scaleway_iam_update_user_password", { user_id: bogusId, password: "Xy9!mQ2#kL7%pR4z" }, "password without confirm"],
   ["scaleway_iam_update_user_username", { user_id: bogusId, new_username: "probe_xyz" }, "username without confirm"],
   ["scaleway_iam_delete_user_mfa_otp", { user_id: bogusId }, "mfa delete without confirm"],
+  ["scaleway_iam_set_policy_rules", { policy_id: bogusId, rules: [{ permission_set_names: ["IAMPolicyManager"], organization_id: bogusId }] }, "set_policy_rules without confirm"],
 ]) {
   const res = await client.callTool({ name, arguments: args });
   if (!res.isError) { console.error(`FAILED at "${label}": expected schema rejection, got success`); process.exit(1); }
@@ -574,6 +575,7 @@ for (const [name, args, label] of [
   ["scaleway_iam_enable_scim", {}, "enable_scim without confirm"],
   ["scaleway_iam_disable_scim", {}, "disable_scim without confirm"],
   ["scaleway_iam_delete_jwt", { jti: bogusId }, "delete_jwt without confirm"],
+  ["scaleway_audit_create_export_job", { name: "probe", bucket: "probe-bucket" }, "create_export_job without confirm"],
 ]) {
   const res = await client.callTool({ name, arguments: args });
   if (!res.isError) { console.error(`FAILED at "${label}": expected schema rejection, got success`); process.exit(1); }
