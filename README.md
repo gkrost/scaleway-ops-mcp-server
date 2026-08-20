@@ -43,14 +43,19 @@ Application scoped for something else) and grant it only what the table above ne
 
 ## Running
 
-Via Claude Code / any MCP client, as a stdio server. Simplest, via `npx` (no local clone needed):
+Via Claude Code / any MCP client, as a stdio server. Simplest, via `npx` (no local clone needed) -
+pin `@latest` explicitly, don't leave the spec bare: `npx` caches its first resolution of an
+unpinned package name and silently keeps reusing that same version on every later run, even after
+a new one is published, unless you either pin `@latest` or clear `npx`'s cache yourself
+(live-verified 2026-08-20 - `npx -y scaleway-ops-mcp-server` kept serving a stale `0.1.0` from
+days earlier while `npx -y scaleway-ops-mcp-server@latest` correctly resolved `0.2.0`):
 
 ```json
 {
   "mcpServers": {
     "scaleway-ops": {
       "command": "npx",
-      "args": ["-y", "scaleway-ops-mcp-server"],
+      "args": ["-y", "scaleway-ops-mcp-server@latest"],
       "env": {
         "SCW_ACCESS_KEY": "...",
         "SCW_SECRET_KEY": "...",
