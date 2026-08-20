@@ -462,9 +462,11 @@ export function registerBucketConfig(server: McpServer, config: Config) {
     {
       title: "Delete Scaleway bucket encryption config",
       description:
-        "Remove the bucket's default-encryption configuration. Live-verified 2026-08-18: this reverts the console's 'Encryption type' back to 'Disabled' - a real change, not a no-op on inert metadata.",
-      inputSchema: { bucket: bucketField, region: regionField },
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+        "Remove the bucket's default-encryption configuration. Requires confirm=true: live-verified 2026-08-18, " +
+        "this reverts the console's 'Encryption type' back to 'Disabled' - a real security-posture downgrade (future " +
+        "uploads that don't explicitly request SSE stop getting it by default), not a no-op on inert metadata.",
+      inputSchema: { bucket: bucketField, region: regionField, confirm: confirmField },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     async ({ bucket, region }) =>
       handleS3(async () => {

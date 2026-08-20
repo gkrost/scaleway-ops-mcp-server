@@ -4,6 +4,7 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- `scaleway_s3_delete_bucket_encryption` now requires `confirm=true` and is annotated `destructiveHint: true`, matching its siblings `delete_bucket_tagging`/`delete_bucket_lifecycle`/`delete_bucket_policy` in the same file - it silently disables a live security control (future uploads stop getting default SSE), the same "loosening" class of change `scaleway_iam_update_security_settings` already requires `confirm=true` for (#64).
 - `scaleway_iam_delete_api_key` now refuses (even with `confirm=true`) to delete THIS server's own operating credential (the key matching `SCW_ACCESS_KEY`), and `scaleway_iam_delete_application` now refuses to delete the Application that owns it - deleting either would revoke every capability this server has (not just IAM management, the class of lockout #43 covers) with no way to undo it through this server afterward (#63).
 
 - `scaleway_iam_delete_policy` now GETs current rules first and refuses the delete if the policy currently grants `IAMPolicyManager`/`IAMApplicationManager`, even with `confirm=true` (issue #43).
