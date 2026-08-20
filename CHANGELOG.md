@@ -4,6 +4,14 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+## 0.2.0 (2026-08-20)
+
+Follow-up hardening pass after a multi-angle audit (static review of the full codebase plus live
+adversarial testing against a real account) found 17 real issues across three rounds - all fixed
+here. Several are schema changes that reject input the previous version silently accepted (new
+required `confirm` fields, stricter bucket-name/region validation), which is why this is a minor
+bump rather than a patch, per this project's pre-1.0 convention.
+
 - `scripts/smoke-test.mjs` now exercises the full `put`/`get`/`delete_bucket_policy` round trip on the throwaway config bucket - previously these tools had zero coverage in this suite (every other bucket-config feature in the same file gets this treatment), despite Bucket Policies being able to grant `Principal *` (#65).
 - `scaleway_s3_delete_bucket_encryption` now requires `confirm=true` and is annotated `destructiveHint: true`, matching its siblings `delete_bucket_tagging`/`delete_bucket_lifecycle`/`delete_bucket_policy` in the same file - it silently disables a live security control (future uploads stop getting default SSE), the same "loosening" class of change `scaleway_iam_update_security_settings` already requires `confirm=true` for (#64).
 - `scaleway_iam_delete_api_key` now refuses (even with `confirm=true`) to delete THIS server's own operating credential (the key matching `SCW_ACCESS_KEY`), and `scaleway_iam_delete_application` now refuses to delete the Application that owns it - deleting either would revoke every capability this server has (not just IAM management, the class of lockout #43 covers) with no way to undo it through this server afterward (#63).

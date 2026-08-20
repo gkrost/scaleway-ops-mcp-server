@@ -1,6 +1,6 @@
 {
   "name": "scaleway-ops-mcp-server",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "MCP server for Scaleway IAM (Applications, API keys, Policies, Permission sets) and Object Storage (buckets, Bucket Policies, object CRUD)",
   "type": "module",
   "main": "dist/index.js",
