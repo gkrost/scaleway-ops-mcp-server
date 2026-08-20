@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Config } from "../config.js";
 import { iamListAll, iamRequest, withIamErrorHandling } from "../iamClient.js";
-import { toolJsonResult } from "../output.js";
+import { toolJsonResult, toolError } from "../output.js";
 
 interface ApiKey {
   access_key: string;
@@ -153,12 +153,27 @@ export function registerApiKeys(server: McpServer, config: Config) {
     "scaleway_iam_delete_api_key",
     {
       title: "Delete Scaleway API Key",
-      description: "PERMANENTLY revoke an API key by its access_key. Requires confirm=true. Irreversible - anything using this key stops authenticating immediately.",
+      description:
+        "PERMANENTLY revoke an API key by its access_key. Requires confirm=true. Irreversible - anything using this " +
+        "key stops authenticating immediately. Refused (even with confirm=true) when access_key is THIS server's " +
+        "own operating credential (SCW_ACCESS_KEY): deleting it would not just revoke one permission, it would " +
+        "revoke every capability this server has - IAM, S3, Audit Trail, all of it - immediately, with no way to " +
+        "undo it through this server (the credential needed to create a replacement is the one just deleted).",
       inputSchema: deleteSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     async ({ access_key }) =>
       withIamErrorHandling(async () => {
+        if (access_key === config.SCW_ACCESS_KEY) {
+          return toolError(
+            `Refusing to delete ${access_key}: it is THIS server's own operating credential (SCW_ACCESS_KEY). ` +
+              "Deleting it would revoke every capability this server has, not just IAM management, and there is " +
+              "no way to undo it through this server afterward - the credential needed to create a replacement " +
+              "key is the one just deleted. This is refused even with confirm=true. Create a replacement key on " +
+              "the Application first (scaleway_iam_create_api_key), redeploy this server with it, and only then " +
+              "delete the old one.",
+          );
+        }
         await iamRequest<void>(config, "DELETE", `/api-keys/${access_key}`);
         return toolJsonResult({ deleted: true, access_key }, config.MAX_OUTPUT_CHARS);
       }),

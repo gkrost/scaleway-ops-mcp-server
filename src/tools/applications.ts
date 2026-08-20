@@ -17,6 +17,11 @@ interface Application {
   tags?: string[];
 }
 
+/** Minimal shape needed to resolve which Application owns THIS server's own operating credential. */
+interface OwnApiKey {
+  application_id?: string;
+}
+
 const createSchema = {
   name: z
     .string()
@@ -154,12 +159,25 @@ export function registerApplications(server: McpServer, config: Config) {
         "Requires confirm=true. Refused (even with confirm=true) if a policy attached to this Application currently " +
         "grants IAMPolicyManager/IAMApplicationManager: deleting the Application DETACHES that policy rather than " +
         "deleting it, which would silently strip the IAM-management grant from whoever holds it - including this " +
-        "server, if this is its own Application - without ever going through scaleway_iam_delete_policy's own guard.",
+        "server, if this is its own Application - without ever going through scaleway_iam_delete_policy's own guard. " +
+        "Also refused outright if this IS the Application that owns THIS server's own operating credential " +
+        "(SCW_ACCESS_KEY), independent of the IAM-management check above: deleting it also deletes every API key " +
+        "it holds, including the one authenticating this very call, revoking every capability this server has - " +
+        "not just IAM - with no way to undo it afterward.",
       inputSchema: deleteSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     async ({ application_id }) =>
       withIamErrorHandling(async () => {
+        const ownKey = await iamRequest<OwnApiKey>(config, "GET", `/api-keys/${config.SCW_ACCESS_KEY}`);
+        if (ownKey.application_id === application_id) {
+          return toolError(
+            `Refusing to delete ${application_id}: it is the Application that owns THIS server's own operating ` +
+              "credential (SCW_ACCESS_KEY). Deleting an Application deletes every API key it holds, including the " +
+              "one authenticating this very call - this server would lose every capability it has, not just IAM " +
+              "management, with no way to undo it afterward. This is refused even with confirm=true.",
+          );
+        }
         const blocking = await findIamManagementPoliciesFor(config, { application_id });
         if (blocking.length > 0) {
           return toolError(
