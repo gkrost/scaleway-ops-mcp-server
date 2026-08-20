@@ -70,6 +70,34 @@ console.log("\n=== scaleway_iam_list_policies (filter: scaleway-ops app) ===");
 const policies = await client.callTool({ name: "scaleway_iam_list_policies", arguments: { application_id: appId } });
 console.log(text(policies).slice(0, 600));
 
+console.log("\n=== SELF-LOCKOUT GUARD (issue #63): the server's own operating credential/Application cannot be deleted through itself ===");
+// Resolve the real access_key -> application_id relationship from the API rather than trusting the
+// name_filter above - this is the actual credential authenticating this very client connection.
+const allKeysUnfiltered = expectJson(await client.callTool({ name: "scaleway_iam_list_api_keys", arguments: {} }), "list_api_keys (unfiltered, resolve own key)");
+const ownKeyEntry = allKeysUnfiltered.api_keys.find((k) => k.access_key === creds.SCW_ACCESS_KEY);
+if (!ownKeyEntry) {
+  console.error("FAILED: could not find this server's own operating key (SCW_ACCESS_KEY) in list_api_keys - cannot verify the self-lockout guard");
+  process.exit(1);
+}
+console.log("own operating key found:", ownKeyEntry.access_key, "-> application_id", ownKeyEntry.application_id);
+
+// The dangerous case, proven live and for real - same pattern as the real-OWNER delete_user guard
+// below: the tool itself must refuse before the request ever reaches the API, so a bug here would
+// never actually delete anything (the check runs before any DELETE call in both handlers).
+const selfKeyDelete = await client.callTool({ name: "scaleway_iam_delete_api_key", arguments: { access_key: creds.SCW_ACCESS_KEY, confirm: true } });
+if (!selfKeyDelete.isError || !text(selfKeyDelete).includes("own operating credential")) {
+  console.error("FAILED: delete_api_key on the server's own operating key was not refused:", text(selfKeyDelete));
+  process.exit(1);
+}
+console.log("guard ok (own operating key delete refused):", text(selfKeyDelete).slice(0, 120));
+
+const selfAppDelete = await client.callTool({ name: "scaleway_iam_delete_application", arguments: { application_id: ownKeyEntry.application_id, confirm: true } });
+if (!selfAppDelete.isError || !text(selfAppDelete).includes("own operating")) {
+  console.error("FAILED: delete_application on the server's own Application was not refused:", text(selfAppDelete));
+  process.exit(1);
+}
+console.log("guard ok (own Application delete refused):", text(selfAppDelete).slice(0, 120));
+
 console.log("\n=== WRITE PATH: create -> get -> delete a throwaway Application ===");
 // Unique name per run: Scaleway's name-uniqueness check appears to lag briefly behind a DELETE
 // (a create-with-same-name moments after deleting one 409'd here even though a GET already 404'd).
