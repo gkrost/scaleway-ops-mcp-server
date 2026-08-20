@@ -480,6 +480,40 @@ try {
   await expectError("scaleway_s3_delete_bucket_encryption", { bucket: cfgBucket }, "delete_bucket_encryption without confirm rejected");
   console.log("encryption delete:", text(await client.callTool({ name: "scaleway_s3_delete_bucket_encryption", arguments: { bucket: cfgBucket, confirm: true } })).slice(0, 80));
 
+  // --- bucket policy (issue #65: previously had zero coverage anywhere in this suite) ---
+  // A real, minimal, non-destructive statement using the smoke test's own already-fully-privileged
+  // Application (appId, resolved at the top of this script) as Principal - granting it read-only
+  // access to a throwaway bucket that's deleted moments later changes nothing materially, but
+  // exercises the real PUT/GET/DELETE round trip against Scaleway's API, including the bare-
+  // bucket-name-not-ARN Resource shape the tool's own description warns about.
+  const bucketPolicyDoc = {
+    Version: "2023-04-17",
+    Statement: [
+      {
+        Sid: "SmokeTestReadOnly",
+        Effect: "Allow",
+        Principal: { SCW: `application_id:${appId}` },
+        Action: ["s3:GetObject", "s3:ListBucket"],
+        Resource: [cfgBucket, `${cfgBucket}/*`],
+      },
+    ],
+  };
+  expectJson(
+    await client.callTool({
+      name: "scaleway_s3_put_bucket_policy",
+      arguments: { bucket: cfgBucket, policy_json: JSON.stringify(bucketPolicyDoc), confirm: true },
+    }),
+    "put_bucket_policy",
+  );
+  const policyBack = expectJson(await client.callTool({ name: "scaleway_s3_get_bucket_policy", arguments: { bucket: cfgBucket } }), "get_bucket_policy");
+  if (policyBack.policy?.Statement?.[0]?.Sid !== "SmokeTestReadOnly" || policyBack.policy?.Statement?.[0]?.Principal?.SCW !== `application_id:${appId}`) {
+    console.error(`FAILED: get_bucket_policy did not echo the applied statement: ${JSON.stringify(policyBack)}`);
+    process.exit(1);
+  }
+  console.log("bucket policy get: statement echoed (Sid + Principal match)");
+  console.log("bucket policy delete:", text(await client.callTool({ name: "scaleway_s3_delete_bucket_policy", arguments: { bucket: cfgBucket, confirm: true } })).slice(0, 80));
+  await expectError("scaleway_s3_get_bucket_policy", { bucket: cfgBucket }, "no bucket policy after delete");
+
   // --- object lock (one-way; this throwaway bucket is deleted right after) ---
   // Suspend versioning first so the instructive-error path below is actually reachable.
   console.log("versioning suspend for lock-negative test:", text(await client.callTool({ name: "scaleway_s3_set_bucket_versioning", arguments: { bucket: cfgBucket, status: "Suspended", confirm: true } })).slice(0, 80));
