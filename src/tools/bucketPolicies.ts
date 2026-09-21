@@ -1,8 +1,7 @@
 import { z } from "zod";
 import { randomBytes } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { DeleteBucketPolicyCommand, GetBucketPolicyCommand, ListBucketsCommand, PutBucketPolicyCommand, S3ServiceException } from "@aws-sdk/client-s3";
-import type { S3Client } from "@aws-sdk/client-s3";
+import { DeleteBucketPolicyCommand, GetBucketPolicyCommand, ListBucketsCommand, PutBucketPolicyCommand, S3ServiceException } from "@aws-sdk/client-s3";import type { S3Client } from "@aws-sdk/client-s3";
 import type { Config } from "../config.js";
 import { getS3Client, handleS3 } from "../s3Client.js";
 import { toolJsonResult, toolError } from "../output.js";
@@ -472,7 +471,14 @@ export function registerBucketPolicies(server: McpServer, config: Config) {
           if (expired.length === 0) continue;
           expiredByBucket.push({ bucket: b, sids: expired });
           if (confirm === true) {
-            await putPolicyDoc(client, b, { ...doc, Statement: statements.filter((s) => !isExpiredTmp(s)) });
+            const remaining = statements.filter((s) => !isExpiredTmp(s));
+            if (remaining.length === 0) {
+              // An empty Statement array is not a valid policy - removing the last statement IS
+              // "no policy", so delete the document rather than PUT an invalid one.
+              await client.send(new DeleteBucketPolicyCommand({ Bucket: b }));
+            } else {
+              await putPolicyDoc(client, b, { ...doc, Statement: remaining });
+            }
             revoked = true;
           }
         }

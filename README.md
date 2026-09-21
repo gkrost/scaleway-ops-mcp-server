@@ -144,16 +144,23 @@ Or from a local clone/build, useful for development or pinning to an unreleased 
 - Versioning: `scaleway_s3_get_bucket_versioning`, `scaleway_s3_set_bucket_versioning` (suspend needs confirm).
 - Website: `scaleway_s3_get/put/delete_bucket_website` (put publishes an endpoint, needs confirm).
 - Visibility: `scaleway_s3_get/set_bucket_visibility` - coarse public/private via canned ACL (public needs confirm; Bucket Policies are the fine-grained mechanism).
-- Lifecycle rules: `scaleway_s3_get/put/delete_bucket_lifecycle` - expiration, noncurrent-version expiration, transitions, and aborting incomplete multipart uploads (#74). Put is FULL-REPLACE: omitted rules are removed, so an abort-only put deletes an existing expiration rule. Put/delete are confirm-guarded (expiration and noncurrent expiration permanently delete data). The one exception is an abort-only put on a bucket whose current rules are abort-only too, checked by a read before writing; it needs no confirm.
+- Lifecycle rules: `scaleway_s3_get/put/delete_bucket_lifecycle` - expiration, noncurrent-version expiration, transitions, and aborting incomplete multipart uploads (#74). Put is FULL-REPLACE: omitted rules are removed, so an abort-only put deletes an existing expiration rule. Put/delete are confirm-guarded (expiration and noncurrent expiration permanently delete data). The exceptions: an abort-only put on a bucket whose current rules are abort-only too (checked by a read before writing), and `dry_run: true`, which returns the rule-level diff (added/removed/changed/unchanged, #80) without writing. Every put echoes that diff.
+- Single-rule lifecycle edits (#80): `scaleway_s3_add_lifecycle_rule` (server-side merge, duplicate-ID refused, existing rules - including elements this server doesn't model - pass through untouched; confirm unless the new rule is abort-only) and `scaleway_s3_remove_lifecycle_rule` (confirm unless the removed rule is abort-only; refuses the last remaining rule and unknown IDs).
 - Encryption config: `scaleway_s3_get/put/delete_bucket_encryption` - real, toggleable setting (console-confirmed), not inert metadata; see `docs/gotchas.md`.
 - Object Lock: `scaleway_s3_get_object_lock`, `scaleway_s3_enable_object_lock` (one-way: never disableable, versioning prerequisite handled, versioning frozen afterwards; create-time lock flag is silently ignored by Scaleway).
+- Read-only analytics (#76): `scaleway_s3_bucket_stats` (count/bytes/oldest/newest overall and per group; `group_by: "key-stem"` strips trailing timestamps so a backup series is one row), `scaleway_s3_audit_lifecycle` (flags buckets with no lifecycle config, no enabled expiration rule, no enabled abort-multipart rule, and - single bucket + `check_objects` - retention drift where the oldest object outlives the smallest enabled expiration rule).
 - No tools for bucket logging or bucket metrics: Scaleway's S3 endpoint returns `NotImplemented` for both.
 
 **Object Storage Bucket Policies**
-- `scaleway_s3_get_bucket_policy`, `scaleway_s3_put_bucket_policy`, `scaleway_s3_delete_bucket_policy`
+- `scaleway_s3_get_bucket_policy`, `scaleway_s3_put_bucket_policy`, `scaleway_s3_delete_bucket_policy` (put is FULL-REPLACE, confirm-guarded; `dry_run: true` returns the by-Sid statement diff (#80) without writing, and every put echoes it).
+- Statement-level edits (#77): `scaleway_s3_add_bucket_policy_statement` (server-side read-modify-write, duplicate Sid refused, never revokes) and `scaleway_s3_remove_bucket_policy_statement` (confirm-guarded; refuses unknown Sids and removing the last statement).
+- Temporary grants (#77): `scaleway_s3_grant_temporary_access` mints an Allow statement whose Sid encodes the expiry epoch (`tmp-<epoch>-<rand>`); `scaleway_s3_revoke_expired_grants` previews (or, with confirm, removes) lapsed `tmp-*` statements across one bucket or the whole region.
+- `scaleway_s3_explain_access` (#73) - evaluate one action against a bucket's policy for THIS server's own principal: allowed/denied/no-matching-statement and by which Sid. On any AccessDenied, the S3 tools now append the same context to their error instead of a bare "Access Denied".
 
-**Object Storage Objects** (single-part only; multipart/large-file upload is out of scope)
+**Object Storage Objects** (multipart/large-file UPLOAD is out of scope; copies over 5 GiB go multipart automatically)
 - `scaleway_s3_put_object`, `scaleway_s3_get_object`, `scaleway_s3_list_objects`, `scaleway_s3_head_object`, `scaleway_s3_copy_object`, `scaleway_s3_delete_object`, `scaleway_s3_delete_objects`
+- `scaleway_s3_copy_object` switches to a multipart copy (ranged `UploadPartCopy`, aborted on failure so no billed parts leak) above S3's 5 GiB single-request ceiling (#75). `scaleway_s3_copy_prefix` (#75) does bucket-to-bucket prefix sync with `rclone copy --ignore-existing` semantics, server-side: dry-run by default, skips existing keys, bounded by `max_objects` with a continuation token. One server-side copy needs a principal with read on the source AND write on the destination - with per-stage bucket policies that means an explicit temporary grant (#77).
+- Incomplete multipart uploads (#78): `scaleway_s3_list_multipart_uploads` (parts you pay for that no object listing shows; `include_parts: true` adds part count/bytes) and `scaleway_s3_abort_multipart_upload` (confirm-guarded; permanently deletes the uploaded parts).
 - `put_object`/`get_object` carry binary payloads as base64 (`encoding: "base64"`); decoded size is capped by `MAX_PUT_OBJECT_BYTES` / `MAX_GET_OBJECT_BYTES` respectively (default 5 MB). `get_object` auto-detects UTF-8 text vs. binary and returns `encoding` accordingly; objects over the get ceiling fail fast - use `scaleway_s3_generate_presigned_url`.
 - `scaleway_s3_get_object_tags`, `scaleway_s3_put_object_tags` (`put` replaces the whole tag set, same replace-not-merge semantics as `put_bucket_policy`)
 - `scaleway_s3_generate_presigned_url` - time-limited GET/PUT URL for handing direct object access to something outside MCP, without exposing this server's credential.
@@ -174,12 +181,17 @@ Or from a local clone/build, useful for development or pinning to an unreleased 
 - `scaleway_audit_list_export_jobs`, `scaleway_audit_create_export_job`, `scaleway_audit_delete_export_job` (confirm-guarded; stops future exports, doesn't delete already-exported objects).
 - Alert/export write tools need more than `AuditTrailReadOnly` on this server's credential; permission errors surface verbatim.
 
+**Security audit** (#81, read-only)
+- `scaleway_security_audit` - cross-references buckets, bucket policies, applications and API keys into severity-grouped findings: buckets with no policy; dangling principals; cross-stage grants (labelled heuristic); `Principal "*"` or delete/abort grants; never-expiring keys (this server's own key is `high`); multi-key applications; possibly-orphaned keys whose sibling's description says the prior credential was lost/rotated. Reports only - remediation stays with the confirm-gated tools. The server also warns on stderr at startup when its own operating credential has no expiry.
+
 ## Scope
 
 Deliberately narrow: IAM identity/policy management (Applications, human Users, and Groups),
 SSH Keys, JWTs, SAML/SCIM/Security Settings, Bucket Policies, bucket lifecycle and
-configuration, Object Storage object CRUD (put/get/list/head/copy/delete/tags/presigned URLs,
-single-part only), and Audit Trail (event queries, alert rules, export jobs), because that's what
+configuration, Object Storage object CRUD (put/get/list/head/copy/delete/tags/presigned URLs;
+copies above 5 GiB go multipart automatically, multipart upload remains out of scope), a
+read-only access/keys security audit, and Audit Trail (event queries, alert rules, export jobs),
+because that's what
 actually caused friction so far. Not a general Scaleway API wrapper - no compute, databases,
 containers, no multipart upload, no bucket logging/metrics (Scaleway's S3 API doesn't implement
 them), no Quotas (no real endpoint could be found - see docs/gotchas.md). Extend it the same way

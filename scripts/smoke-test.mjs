@@ -328,6 +328,145 @@ if (bucketsAfterObjTest.buckets.some((b) => b.name === objBucket)) {
 }
 console.log("verify gone: object-test bucket no longer in list_buckets");
 
+console.log("\n=== NEW TOOLS (#73 #75 #76 #77 #78 #80): copy_prefix, stats, lifecycle merge, policy statements, multipart ===");
+const cpsrc = `mcp-smoke-test-cpsrc-${Date.now()}`;
+const cpdst = `mcp-smoke-test-cpdst-${Date.now()}`;
+expectJson(await client.callTool({ name: "scaleway_s3_create_bucket", arguments: { bucket: cpsrc } }), "create copy-prefix src");
+expectJson(await client.callTool({ name: "scaleway_s3_create_bucket", arguments: { bucket: cpdst } }), "create copy-prefix dst");
+try {
+  for (const k of ["series_2026-09-19T01-00-00.dump", "series_2026-09-20T01-00-00.dump", "other.txt"]) {
+    expectJson(await client.callTool({ name: "scaleway_s3_put_object", arguments: { bucket: cpsrc, key: k, content: `payload-${k}` } }), `seed ${k}`);
+  }
+
+  // #75 copy_prefix: DRY RUN BY DEFAULT - three objects would copy, nothing is written.
+  const cpDry = expectJson(await client.callTool({ name: "scaleway_s3_copy_prefix", arguments: { source_bucket: cpsrc, dest_bucket: cpdst } }), "copy_prefix dry run (default)");
+  if (cpDry.dry_run !== true || cpDry.dry_run_summary.would_copy !== 3 || cpDry.copied_count !== 0) {
+    console.error(`FAILED: copy_prefix dry-run mismatch: ${JSON.stringify(cpDry)}`); process.exit(1);
+  }
+  console.log("copy_prefix dry run: would_copy=3, nothing written");
+
+  // Real run copies 3; the ignore-existing rerun skips all 3; overwrite mode is confirm-gated.
+  const cpRun = expectJson(await client.callTool({ name: "scaleway_s3_copy_prefix", arguments: { source_bucket: cpsrc, dest_bucket: cpdst, dry_run: false } }), "copy_prefix run");
+  if (cpRun.copied_count !== 3 || cpRun.failed_count !== 0) { console.error(`FAILED: copy_prefix run: ${JSON.stringify(cpRun)}`); process.exit(1); }
+  console.log("copy_prefix run: copied 3, failed 0");
+  const cpRerun = expectJson(await client.callTool({ name: "scaleway_s3_copy_prefix", arguments: { source_bucket: cpsrc, dest_bucket: cpdst, dry_run: false } }), "copy_prefix rerun (skip existing)");
+  if (cpRerun.copied_count !== 0 || cpRerun.skipped_existing_count !== 3) { console.error(`FAILED: copy_prefix skip-existing: ${JSON.stringify(cpRerun)}`); process.exit(1); }
+  console.log("copy_prefix rerun: 0 copied, 3 skipped (ignore-existing semantics)");
+  await expectError("scaleway_s3_copy_prefix", { source_bucket: cpsrc, dest_bucket: cpdst, dry_run: false, ignore_existing: false }, "copy_prefix overwrite mode without confirm rejected");
+
+  // #76 stats: key-stem grouping collapses the two timestamped dumps into one "series" row.
+  const stats = expectJson(await client.callTool({ name: "scaleway_s3_bucket_stats", arguments: { bucket: cpsrc } }), "bucket_stats");
+  const stems = stats.groups.map((g) => g.group).sort();
+  if (stats.totals.objects !== 3 || stems.join(",") !== "other,series") {
+    console.error(`FAILED: bucket_stats stems: totals=${JSON.stringify(stats.totals)} groups=${JSON.stringify(stats.groups)}`); process.exit(1);
+  }
+  console.log("bucket_stats: 3 objects, key-stem groups [other, series] (timestamps stripped)");
+  const audit = expectJson(await client.callTool({ name: "scaleway_s3_audit_lifecycle", arguments: { bucket: cpsrc } }), "audit_lifecycle (fresh bucket)");
+  if (!audit.findings.some((f) => f.code === "no-lifecycle-rules")) {
+    console.error(`FAILED: audit_lifecycle did not flag a rule-less bucket: ${JSON.stringify(audit.findings)}`); process.exit(1);
+  }
+  console.log("audit_lifecycle: rule-less bucket flagged (no-lifecycle-rules)");
+
+  // #78 multipart listing on a bucket with none.
+  const mpu0 = expectJson(await client.callTool({ name: "scaleway_s3_list_multipart_uploads", arguments: { bucket: cpsrc } }), "list_multipart_uploads (empty)");
+  if (mpu0.count !== 0) { console.error(`FAILED: expected 0 in-progress uploads: ${JSON.stringify(mpu0)}`); process.exit(1); }
+  console.log("list_multipart_uploads: 0 in progress on a clean bucket");
+
+  // #80 lifecycle: full-replace put (confirm) -> add abort-only rule WITHOUT confirm (merge!) -> dry_run diff
+  // -> duplicate-ID refused -> removing the expiration rule is confirm-gated -> abort-only removal is not.
+  expectJson(
+    await client.callTool({
+      name: "scaleway_s3_put_bucket_lifecycle",
+      arguments: { bucket: cpsrc, rules: [{ id: "expire-30d", enabled: true, expiration_days: 30 }, { id: "abort-mpu", enabled: true, abort_incomplete_multipart_days: 1 }], confirm: true },
+    }),
+    "put_bucket_lifecycle (expire + abort)",
+  );
+  const lcAdd = expectJson(
+    await client.callTool({ name: "scaleway_s3_add_lifecycle_rule", arguments: { bucket: cpsrc, rule: { id: "abort-mpu-2", enabled: true, abort_incomplete_multipart_days: 2 } } }),
+    "add_lifecycle_rule (abort-only, no confirm)",
+  );
+  if (lcAdd.rule_count !== 3 || lcAdd.diff.added.join(",") !== "abort-mpu-2") { console.error(`FAILED: add_lifecycle_rule: ${JSON.stringify(lcAdd)}`); process.exit(1); }
+  console.log("add_lifecycle_rule: abort-only rule merged WITHOUT confirm, 3 rules now");
+  const lcDry = expectJson(
+    await client.callTool({
+      name: "scaleway_s3_put_bucket_lifecycle",
+      arguments: { bucket: cpsrc, rules: [{ id: "expire-30d", enabled: true, expiration_days: 30 }, { id: "abort-mpu", enabled: true, abort_incomplete_multipart_days: 1 }, { id: "abort-mpu-2", enabled: true, abort_incomplete_multipart_days: 2 }], dry_run: true },
+    }),
+    "put_bucket_lifecycle dry_run",
+  );
+  if (lcDry.nothing_written !== true || lcDry.diff.unchanged.length !== 3) { console.error(`FAILED: lifecycle dry_run diff: ${JSON.stringify(lcDry)}`); process.exit(1); }
+  console.log("put_bucket_lifecycle dry_run: diff shows 3 unchanged, nothing written");
+  await expectError("scaleway_s3_add_lifecycle_rule", { bucket: cpsrc, rule: { id: "abort-mpu", enabled: true, abort_incomplete_multipart_days: 3 } }, "add_lifecycle_rule duplicate ID rejected");
+  await expectError("scaleway_s3_remove_lifecycle_rule", { bucket: cpsrc, id: "expire-30d" }, "remove_lifecycle_rule of an expiration rule without confirm rejected");
+  const lcRm = expectJson(await client.callTool({ name: "scaleway_s3_remove_lifecycle_rule", arguments: { bucket: cpsrc, id: "expire-30d", confirm: true } }), "remove_lifecycle_rule (expiration, confirm)");
+  if (lcRm.remaining_ids.sort().join(",") !== "abort-mpu,abort-mpu-2") { console.error(`FAILED: remove_lifecycle_rule remaining: ${JSON.stringify(lcRm)}`); process.exit(1); }
+  const lcRm2 = expectJson(await client.callTool({ name: "scaleway_s3_remove_lifecycle_rule", arguments: { bucket: cpsrc, id: "abort-mpu" } }), "remove_lifecycle_rule (abort-only, no confirm)");
+  if (lcRm2.remaining_ids.join(",") !== "abort-mpu-2") { console.error(`FAILED: remove abort-only rule: ${JSON.stringify(lcRm2)}`); process.exit(1); }
+  console.log("remove_lifecycle_rule: expiration needed confirm, abort-only did not");
+  console.log("lifecycle delete:", text(await client.callTool({ name: "scaleway_s3_delete_bucket_lifecycle", arguments: { bucket: cpsrc, confirm: true } })).slice(0, 80));
+
+  // #77 statement-level policy tools on the throwaway dst bucket.
+  const statement = { sid: "SmokeTestReadOnly", effect: "Allow", principal: "*", action: ["s3:GetObject"], resource: [cpdst, `${cpdst}/*`] };
+  const psAdd = expectJson(
+    await client.callTool({ name: "scaleway_s3_add_bucket_policy_statement", arguments: { bucket: cpdst, statement } }),
+    "add_bucket_policy_statement",
+  );
+  if (psAdd.statement_count !== 1) { console.error(`FAILED: add statement: ${JSON.stringify(psAdd)}`); process.exit(1); }
+  await expectError("scaleway_s3_add_bucket_policy_statement", { bucket: cpdst, statement }, "duplicate Sid refused");
+  console.log("add_bucket_policy_statement: added, duplicate Sid refused");
+  const grant = expectJson(
+    await client.callTool({
+      name: "scaleway_s3_grant_temporary_access",
+      arguments: { application_id: appId, bucket: cpdst, action: ["s3:ListBucket"], expires_at: new Date(Date.now() + 86_400_000).toISOString() },
+    }),
+    "grant_temporary_access",
+  );
+  if (!grant.sid.startsWith("tmp-") || grant.expires_at.length === 0) { console.error(`FAILED: temporary grant: ${JSON.stringify(grant)}`); process.exit(1); }
+  console.log("grant_temporary_access: minted", grant.sid);
+  // A statement whose Sid encodes an ALREADY-PASSED expiry (epoch 1e9 = 2001) is visible to the sweep;
+  // preview finds it, confirm removes it (it is the only statement -> the policy itself is deleted).
+  expectJson(
+    await client.callTool({
+      name: "scaleway_s3_put_bucket_policy",
+      arguments: { bucket: cpdst, policy_json: JSON.stringify({ Version: "2023-04-17", Statement: [{ Sid: "tmp-1000000000-dead", Effect: "Allow", Principal: { SCW: `application_id:${appId}` }, Action: ["s3:GetObject"], Resource: [cpdst, `${cpdst}/*`] }] }), confirm: true },
+    }),
+    "put policy with an expired tmp- statement",
+  );
+  const sweepPrev = expectJson(await client.callTool({ name: "scaleway_s3_revoke_expired_grants", arguments: { bucket: cpdst } }), "revoke_expired_grants preview");
+  if (sweepPrev.expired_statement_count !== 1 || sweepPrev.revoked !== false) { console.error(`FAILED: sweep preview: ${JSON.stringify(sweepPrev)}`); process.exit(1); }
+  const sweepRun = expectJson(await client.callTool({ name: "scaleway_s3_revoke_expired_grants", arguments: { bucket: cpdst, confirm: true } }), "revoke_expired_grants confirm");
+  if (sweepRun.revoked !== true) { console.error(`FAILED: sweep run: ${JSON.stringify(sweepRun)}`); process.exit(1); }
+  await expectError("scaleway_s3_get_bucket_policy", { bucket: cpdst }, "policy fully swept -> no policy");
+  console.log("revoke_expired_grants: preview found the lapsed grant, confirm removed it (last statement -> policy deleted)");
+  // Re-add statements for the explain_access probe, then remove via the statement tool.
+  expectJson(await client.callTool({ name: "scaleway_s3_add_bucket_policy_statement", arguments: { bucket: cpdst, statement } }), "re-add statement for explain probe");
+  const explain = expectJson(
+    await client.callTool({ name: "scaleway_s3_explain_access", arguments: { bucket: cpdst, action: "s3:GetObject" } }),
+    "explain_access",
+  );
+  if (explain.verdict !== "allowed") { console.error(`FAILED: explain_access verdict: ${JSON.stringify(explain)}`); process.exit(1); }
+  console.log("explain_access: s3:GetObject ->", explain.verdict, "by", explain.matched_statements.map((m) => m.sid).join(","));
+  await expectError("scaleway_s3_remove_bucket_policy_statement", { bucket: cpdst, sid: "SmokeTestReadOnly" }, "remove_bucket_policy_statement without confirm rejected");
+  const psRm = expectJson(await client.callTool({ name: "scaleway_s3_remove_bucket_policy_statement", arguments: { bucket: cpdst, sid: "SmokeTestReadOnly", confirm: true } }), "remove_bucket_policy_statement (confirm)");
+  if (psRm.remaining_sids.filter(Boolean).length !== 1) { console.error(`FAILED: remove statement remaining: ${JSON.stringify(psRm)}`); process.exit(1); }
+  console.log("remove_bucket_policy_statement: removed with confirm, tmp- grant remains");
+  await expectError("scaleway_s3_remove_bucket_policy_statement", { bucket: cpdst, sid: grant.sid, confirm: true }, "removing the LAST statement refused");
+  console.log("bucket policy delete (teardown):", text(await client.callTool({ name: "scaleway_s3_delete_bucket_policy", arguments: { bucket: cpdst, confirm: true } })).slice(0, 80));
+
+  // #81 read-only security audit (scope=buckets keeps it fast; findings content is org-dependent).
+  const sec = expectJson(await client.callTool({ name: "scaleway_security_audit", arguments: { scope: "buckets" } }), "security_audit (buckets)");
+  if (typeof sec.finding_count !== "number" || !Array.isArray(sec.findings)) { console.error(`FAILED: security_audit shape: ${JSON.stringify(sec).slice(0, 300)}`); process.exit(1); }
+  console.log(`security_audit: ${sec.finding_count} finding(s) (high=${sec.summary.high}, medium=${sec.summary.medium}, low=${sec.summary.low}) - reports only`);
+} finally {
+  for (const [label, b] of [["cpsrc", cpsrc], ["cpdst", cpdst]]) {
+    const list = expectJson(await client.callTool({ name: "scaleway_s3_list_objects", arguments: { bucket: b } }), `list before teardown (${label})`);
+    if (list.count > 0) {
+      await client.callTool({ name: "scaleway_s3_delete_objects", arguments: { bucket: b, keys: list.objects.map((o) => o.key), confirm: true } });
+    }
+    console.log(`deleted ${label} bucket:`, text(await client.callTool({ name: "scaleway_s3_delete_bucket", arguments: { bucket: b, confirm: true } })).slice(0, 80));
+  }
+}
+
 console.log("\n=== AUDIT TRAIL (issue #9): registered audit tools ===");
 const tools = await client.listTools();
 const auditTools = tools.tools.filter((t) => t.name.startsWith("scaleway_audit_")).map((t) => t.name);
