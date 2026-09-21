@@ -1,13 +1,16 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
+  AbortMultipartUploadCommand,
   CopyObjectCommand,
   DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
   GetObjectTaggingCommand,
   HeadObjectCommand,
+  ListMultipartUploadsCommand,
   ListObjectsV2Command,
+  ListPartsCommand,
   PutObjectCommand,
   PutObjectTaggingCommand,
   S3ServiceException,
@@ -164,6 +167,35 @@ const presignedUrlSchema = {
     .optional()
     .describe(
       "Required true when operation='put'. Put hands back a time-limited unauthenticated write URL that anyone who holds it can use to overwrite the object for up to 7 days.",
+    ),
+};
+
+const listMultipartUploadsSchema = {
+  bucket: bucketField,
+  region: regionField,
+  prefix: z.string().optional().describe("Only return in-progress uploads whose key starts with this prefix."),
+  include_parts: z
+    .boolean()
+    .default(false)
+    .describe(
+      "true: also call ListParts for each returned upload (bounded to the first 50) to report its part count and uploaded bytes. " +
+        "That is one extra API call per upload - leave false for a cheap overview.",
+    ),
+  max_uploads: z.number().int().min(1).max(1000).default(100).describe("Max in-progress uploads to return per call."),
+  key_marker: z.string().optional().describe("From a previous call's next_key_marker, to continue past the first page."),
+  upload_id_marker: z.string().optional().describe("From a previous call's next_upload_id_marker (must accompany key_marker)."),
+};
+
+const abortMultipartUploadSchema = {
+  bucket: bucketField,
+  region: regionField,
+  key: keyField,
+  upload_id: z.string().min(1).describe("The UploadId of the in-progress multipart upload, from scaleway_s3_list_multipart_uploads."),
+  confirm: z
+    .literal(true)
+    .describe(
+      "Must be explicitly true. Aborts the upload and PERMANENTLY deletes every part uploaded so far. If an application is still writing this " +
+        "upload, its next part-PUT fails and the upload cannot be resumed.",
     ),
 };
 
@@ -481,6 +513,90 @@ export function registerObjects(server: McpServer, config: Config) {
           { bucket, key, operation, url, expires_in_seconds, expires_at: new Date(Date.now() + expires_in_seconds * 1000).toISOString() },
           config.MAX_OUTPUT_CHARS,
         );
+      }, { config, bucket, region }),
+  );
+
+  // ---------- Incomplete multipart uploads (#78): parts you pay for that no object listing shows ----------
+  server.registerTool(
+    "scaleway_s3_list_multipart_uploads",
+    {
+      title: "List incomplete multipart uploads in a bucket (billed, invisible parts)",
+      description:
+        "Read-only. List multipart uploads still in progress - each holds uploaded parts you pay storage for that NO object listing " +
+        "shows and no lifecycle rule touches unless one aborts incomplete uploads. With include_parts=true, also reports part count and " +
+        "uploaded bytes per upload (one extra ListParts call per upload, bounded to the first 50). Paginated via key_marker/upload_id_marker.",
+      inputSchema: listMultipartUploadsSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ bucket, region, prefix, include_parts, max_uploads, key_marker, upload_id_marker }) =>
+      handleS3(async () => {
+        const client = getS3Client(config, region);
+        const res = await client.send(
+          new ListMultipartUploadsCommand({
+            Bucket: bucket,
+            Prefix: prefix,
+            MaxUploads: max_uploads,
+            KeyMarker: key_marker,
+            UploadIdMarker: upload_id_marker,
+          }),
+        );
+        const uploads = (res.Uploads ?? []).map((u) => ({
+          key: u.Key,
+          upload_id: u.UploadId,
+          initiated: u.Initiated,
+          storage_class: u.StorageClass ?? null,
+          parts: null as number | null,
+          bytes_uploaded: null as number | null,
+          last_part_number: null as number | null,
+        }));
+        if (include_parts) {
+          for (const u of uploads.slice(0, 50)) {
+            try {
+              const parts = await client.send(new ListPartsCommand({ Bucket: bucket, Key: u.key, UploadId: u.upload_id }));
+              const list = parts.Parts ?? [];
+              u.parts = list.length;
+              u.bytes_uploaded = list.reduce((sum, p) => sum + (p.Size ?? 0), 0);
+              u.last_part_number = list.length > 0 ? (list[list.length - 1].PartNumber ?? null) : null;
+            } catch {
+              // ListParts can 404 if the upload completed/was aborted between the two calls - report the overview entry without part detail.
+              u.parts = null;
+              u.bytes_uploaded = null;
+            }
+          }
+        }
+        return toolJsonResult(
+          {
+            bucket,
+            count: uploads.length,
+            uploads,
+            is_truncated: res.IsTruncated ?? false,
+            next_key_marker: res.IsTruncated ? (res.NextKeyMarker ?? res.KeyMarker ?? null) : null,
+            next_upload_id_marker: res.IsTruncated ? (res.NextUploadIdMarker ?? res.UploadIdMarker ?? null) : null,
+            note: include_parts
+              ? "part counts cover at most the first 50 uploads; rerun with include_parts=true after paging if you need the rest"
+              : "include_parts=false: no part counts - set it true to fetch part count and uploaded bytes per upload",
+          },
+          config.MAX_OUTPUT_CHARS,
+        );
+      }, { config, bucket, region }),
+  );
+
+  server.registerTool(
+    "scaleway_s3_abort_multipart_upload",
+    {
+      title: "Abort an incomplete multipart upload (deletes its uploaded parts)",
+      description:
+        "Abort one in-progress multipart upload, PERMANENTLY deleting every part uploaded so far and stopping the storage billing for it. " +
+        "Requires confirm=true. Find upload ids with scaleway_s3_list_multipart_uploads first. A lifecycle rule with " +
+        "abort_incomplete_multipart_days (scaleway_s3_add_lifecycle_rule) prevents the accumulation in the first place.",
+      inputSchema: abortMultipartUploadSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ bucket, region, key, upload_id }) =>
+      handleS3(async () => {
+        const client = getS3Client(config, region);
+        await client.send(new AbortMultipartUploadCommand({ Bucket: bucket, Key: key, UploadId: upload_id }));
+        return toolJsonResult({ bucket, key, upload_id, aborted: true }, config.MAX_OUTPUT_CHARS);
       }, { config, bucket, region }),
   );
 }
