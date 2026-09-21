@@ -130,6 +130,61 @@ async function currentLifecycleRules(client: S3Client, bucket: string): Promise<
   }
 }
 
+/** SDK-shape LifecycleRule from the tool's input schema - the single mapping put/add share. */
+function toSdkRule(r: LifecycleRuleInput): LifecycleRule {
+  return {
+    ID: r.id,
+    Status: r.enabled ? "Enabled" : "Disabled",
+    // Scaleway documents an empty Prefix as "applies to all objects" and uses exactly this form in its
+    // own abort-incomplete-multipart example; sending no Filter at all is undocumented there.
+    Filter: { Prefix: r.prefix ?? "" },
+    Expiration: r.expiration_days ? { Days: r.expiration_days } : undefined,
+    NoncurrentVersionExpiration: r.noncurrent_expiration_days ? { NoncurrentDays: r.noncurrent_expiration_days } : undefined,
+    Transitions: r.transitions?.map((t) => ({ Days: t.days, StorageClass: t.storage_class })),
+    AbortIncompleteMultipartUpload: r.abort_incomplete_multipart_days ? { DaysAfterInitiation: r.abort_incomplete_multipart_days } : undefined,
+  };
+}
+
+/** Deterministic JSON for structural comparison - key order must not create phantom diffs. */
+function canon(v: unknown): string {
+  const sort = (x: unknown): unknown => {
+    if (Array.isArray(x)) return x.map(sort);
+    if (x && typeof x === "object") {
+      return Object.fromEntries(
+        Object.entries(x as Record<string, unknown>)
+          .filter(([, val]) => val !== undefined)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([k, val]) => [k, sort(val)]),
+      );
+    }
+    return x;
+  };
+  return JSON.stringify(sort(v));
+}
+
+interface RuleDiff {
+  added: string[];
+  removed: string[];
+  changed: string[];
+  unchanged: string[];
+}
+
+/** By-ID structural diff between the bucket's current rules and a desired set (#80). */
+function diffRules(current: LifecycleRule[], desired: LifecycleRule[]): RuleDiff {
+  const keyOf = (r: LifecycleRule) => r.ID ?? "(no id)";
+  const cur = new Map(current.map((r) => [keyOf(r), r]));
+  const want = new Map(desired.map((r) => [keyOf(r), r]));
+  const diff: RuleDiff = { added: [], removed: [], changed: [], unchanged: [] };
+  for (const [id, w] of want) {
+    const c = cur.get(id);
+    if (!c) diff.added.push(id);
+    else if (canon(c) === canon(w)) diff.unchanged.push(id);
+    else diff.changed.push(id);
+  }
+  for (const id of cur.keys()) if (!want.has(id)) diff.removed.push(id);
+  return diff;
+}
+
 export function registerBucketConfig(server: McpServer, config: Config) {
   // ---------- Tagging ----------
   server.registerTool(
@@ -451,75 +506,178 @@ export function registerBucketConfig(server: McpServer, config: Config) {
       description:
         "Set a bucket's lifecycle rules. FULL-REPLACE: the provided list becomes the bucket's COMPLETE rule set and " +
         "every existing rule missing from it is REMOVED. A PUT carrying only an abort-incomplete-multipart rule " +
-        "therefore DELETES an existing expiration rule, and that retention silently stops. To add a rule, read the " +
-        "current set with scaleway_s3_get_bucket_lifecycle, merge, and PUT the merged list. " +
+        "therefore DELETES an existing expiration rule, and that retention silently stops. To add or remove a single " +
+        "rule, use scaleway_s3_add_lifecycle_rule / scaleway_s3_remove_lifecycle_rule (server-side merge). Every call " +
+        "computes a rule-level diff against the current configuration (added/removed/changed/unchanged); pass " +
+        "dry_run: true to see it without writing. " +
         "Each rule needs at least one action: expiration_days and noncurrent_expiration_days permanently DELETE data " +
         "once they take effect; transitions move objects to a colder Scaleway class (ONEZONE_IA, GLACIER); " +
         "abort_incomplete_multipart_days aborts multipart uploads still unfinished that many days after initiation " +
         "and deletes their parts, touching no committed object. " +
-        "Requires confirm=true, with one exception: when EVERY rule's only action is abort_incomplete_multipart_days " +
-        "AND the bucket's current rules (read before writing) carry no other action either, nothing committed can be " +
-        "deleted and no expiration/transition rule can be dropped, so confirm may be omitted.",
+        "Requires confirm=true, with two exceptions: dry_run: true never writes, and when EVERY rule's only action is " +
+        "abort_incomplete_multipart_days AND the bucket's current rules carry no other action either, nothing " +
+        "committed can be deleted and no expiration/transition rule can be dropped, so confirm may be omitted.",
       inputSchema: {
         bucket: bucketField,
         region: regionField,
         rules: z.array(lifecycleRuleSchema).min(1),
+        dry_run: z
+          .boolean()
+          .default(false)
+          .describe("true: compute and return the rule-level diff (added/removed/changed/unchanged vs the bucket's current rules) WITHOUT writing anything - no confirm needed."),
         confirm: confirmField
           .optional()
           .describe(
             "Must be explicitly true, unless every rule is abort-incomplete-multipart only and the bucket's current " +
-              "rules are too (see the tool description).",
+              "rules are too (see the tool description), or dry_run is true.",
           ),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ bucket, region, rules, confirm }) =>
+    async ({ bucket, region, rules, confirm, dry_run }) =>
       handleS3(async () => {
         const client = getS3Client(config, region);
+        const desired = rules.map(toSdkRule);
+        const current = await currentLifecycleRules(client, bucket);
+        // Diff is computed on EVERY call (#80): dry_run gets it without writing, a real PUT echoes it
+        // so the caller sees exactly which rules it added, removed or rewrote.
+        const diff = diffRules(current, desired);
+        if (dry_run) {
+          return toolJsonResult(
+            { bucket, dry_run: true, nothing_written: true, diff, current_rule_count: current.length, requested_rule_count: rules.length },
+            config.MAX_OUTPUT_CHARS,
+          );
+        }
         if (confirm !== true) {
           const gated = rules.filter((r) => !isAbortOnlyInput(r)).map((r) => r.id);
           if (gated.length > 0) {
             return toolError(
               `Requires confirm: true - rule(s) ${gated.join(", ")} carry an action other than ` +
                 "abort_incomplete_multipart_days (expiration_days / noncurrent_expiration_days permanently DELETE " +
-                "data; transitions move objects to a colder class). Only an abort-only rule set can skip confirm.",
+                "data; transitions move objects to a colder class). Only an abort-only rule set can skip confirm. " +
+                "Pass dry_run: true to preview the diff without writing.",
             ) as never;
           }
-          // Abort-only request: it still FULL-REPLACES, so read the current rules and refuse if it would drop one
-          // that expires or transitions anything - the silent-drop trap #80 describes. Same read-first shape as
-          // put_object's HEAD-before-overwrite check, with the same (accepted) window between the read and the write.
-          const dropped = (await currentLifecycleRules(client, bucket)).filter((r) => !isAbortOnlyExisting(r)).map((r) => r.ID ?? "(no id)");
+          // Abort-only request: it still FULL-REPLACES, so refuse if it would drop a rule that expires or
+          // transitions anything - the silent-drop trap #80 describes. Same read-first shape as put_object's
+          // HEAD-before-overwrite check, with the same (accepted) window between the read and the write.
+          const dropped = current
+            .filter((r) => diff.removed.includes(r.ID ?? "(no id)") && !isAbortOnlyExisting(r))
+            .map((r) => r.ID ?? "(no id)");
           if (dropped.length > 0) {
             return toolError(
               `Requires confirm: true - FULL-REPLACE: this PUT would REMOVE the bucket's existing rule(s) ` +
                 `${dropped.join(", ")}, which carry actions other than aborting incomplete multipart uploads ` +
                 "(expiration, noncurrent expiration or transitions - they would silently stop). To " +
                 "keep them, read them with scaleway_s3_get_bucket_lifecycle, include them in 'rules' and pass " +
-                "confirm: true. To drop them deliberately, pass confirm: true.",
+                "confirm: true, or use scaleway_s3_add_lifecycle_rule which merges. To drop them deliberately, pass confirm: true.",
             ) as never;
           }
         }
         await client.send(
           new PutBucketLifecycleConfigurationCommand({
             Bucket: bucket,
-            LifecycleConfiguration: {
-              Rules: rules.map((r) => ({
-                ID: r.id,
-                Status: r.enabled ? "Enabled" : "Disabled",
-                // Scaleway documents an empty Prefix as "applies to all objects" and uses exactly this form in its
-                // own abort-incomplete-multipart example; sending no Filter at all is undocumented there.
-                Filter: { Prefix: r.prefix ?? "" },
-                Expiration: r.expiration_days ? { Days: r.expiration_days } : undefined,
-                NoncurrentVersionExpiration: r.noncurrent_expiration_days ? { NoncurrentDays: r.noncurrent_expiration_days } : undefined,
-                Transitions: r.transitions?.map((t) => ({ Days: t.days, StorageClass: t.storage_class })),
-                AbortIncompleteMultipartUpload: r.abort_incomplete_multipart_days
-                  ? { DaysAfterInitiation: r.abort_incomplete_multipart_days }
-                  : undefined,
-              })),
-            },
+            LifecycleConfiguration: { Rules: desired },
           }),
         );
-        return toolJsonResult({ bucket, applied: rules.length, rules }, config.MAX_OUTPUT_CHARS);
+        return toolJsonResult({ bucket, applied: rules.length, rules, diff }, config.MAX_OUTPUT_CHARS);
+      }, { config, bucket, region }),
+  );
+
+  // ---------- Rule-level lifecycle edits (#80): merge instead of full-replace ----------
+  server.registerTool(
+    "scaleway_s3_add_lifecycle_rule",
+    {
+      title: "Add ONE lifecycle rule (server-side merge - existing rules are preserved)",
+      description:
+        "Server-side get -> append -> put: the bucket's current rules are kept and this one is added, so the full-replace " +
+        "silent-drop trap (adding an abort-MPU rule and deleting the expiration rule with it) cannot happen. Refuses a " +
+        "duplicate rule ID. confirm is required unless the NEW rule's only action is abort_incomplete_multipart_days - an " +
+        "expiration rule starts deleting data once effective, so it always needs confirm. See scaleway_s3_put_bucket_lifecycle " +
+        "for the rule fields.",
+      inputSchema: {
+        bucket: bucketField,
+        region: regionField,
+        rule: lifecycleRuleSchema,
+        confirm: confirmField.optional().describe("Required true unless the new rule is abort-incomplete-multipart only (nothing committed can be deleted by it)."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ bucket, region, rule, confirm }) =>
+      handleS3(async () => {
+        const client = getS3Client(config, region);
+        // Read the CURRENT SDK rules and pass them back unchanged - any element this tool's input schema
+        // does not model (tag filters, date-based expiration, ...) round-trips untouched.
+        const current = await currentLifecycleRules(client, bucket);
+        if (current.some((r) => (r.ID ?? "(no id)") === rule.id)) {
+          return toolError(
+            `A rule with ID '${rule.id}' already exists on ${bucket} (existing: ${current.map((r) => r.ID ?? "(no id)").join(", ") || "none"}). ` +
+              "IDs must be unique - remove the old rule first (scaleway_s3_remove_lifecycle_rule) or pick another ID.",
+          ) as never;
+        }
+        if (!isAbortOnlyInput(rule) && confirm !== true) {
+          return toolError(
+            `Requires confirm: true - rule '${rule.id}' carries an action other than abort_incomplete_multipart_days ` +
+              "(expiration_days / noncurrent_expiration_days permanently DELETE data once effective; transitions move objects " +
+              "to a colder class). An abort-only rule may be added without confirm.",
+          ) as never;
+        }
+        const desired = [...current, toSdkRule(rule)];
+        await client.send(new PutBucketLifecycleConfigurationCommand({ Bucket: bucket, LifecycleConfiguration: { Rules: desired } }));
+        return toolJsonResult(
+          { bucket, added: rule.id, rule_count: desired.length, diff: diffRules(current, desired) },
+          config.MAX_OUTPUT_CHARS,
+        );
+      }, { config, bucket, region }),
+  );
+
+  server.registerTool(
+    "scaleway_s3_remove_lifecycle_rule",
+    {
+      title: "Remove ONE lifecycle rule by ID (the rest are preserved)",
+      description:
+        "Server-side get -> filter -> put: only the named rule is removed. Refused when the bucket has no lifecycle config, when " +
+        "no rule carries that ID (existing IDs are listed), or when it is the LAST rule (use scaleway_s3_delete_bucket_lifecycle, " +
+        "which demands its own confirm). confirm is required unless the removed rule's only action is aborting incomplete multipart " +
+        "uploads - removing an expiration rule changes retention, and objects that were due to expire keep living.",
+      inputSchema: {
+        bucket: bucketField,
+        region: regionField,
+        id: z.string().min(1).describe("The rule ID to remove, from scaleway_s3_get_bucket_lifecycle."),
+        confirm: confirmField.optional().describe("Required true unless the removed rule is abort-incomplete-multipart only (removing it cannot affect committed objects)."),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ bucket, region, id, confirm }) =>
+      handleS3(async () => {
+        const client = getS3Client(config, region);
+        const current = await currentLifecycleRules(client, bucket);
+        if (current.length === 0) {
+          return toolError(`Bucket ${bucket} has no lifecycle configuration - nothing to remove.`) as never;
+        }
+        const target = current.find((r) => (r.ID ?? "(no id)") === id);
+        if (!target) {
+          return toolError(`No rule with ID '${id}' on ${bucket}. Existing: ${current.map((r) => r.ID ?? "(no id)").join(", ")}.`) as never;
+        }
+        const remaining = current.filter((r) => r !== target);
+        if (remaining.length === 0) {
+          return toolError(
+            `Rule '${id}' is the bucket's ONLY rule. Removing it would leave an empty configuration - use ` +
+              "scaleway_s3_delete_bucket_lifecycle instead (its confirm covers removing retention wholesale).",
+          ) as never;
+        }
+        if (!isAbortOnlyExisting(target) && confirm !== true) {
+          return toolError(
+            `Requires confirm: true - rule '${id}' carries an action other than aborting incomplete multipart uploads; removing ` +
+              "it changes retention (objects it would have expired keep living, or stop transitioning). An abort-only rule can be " +
+              "removed without confirm.",
+          ) as never;
+        }
+        await client.send(new PutBucketLifecycleConfigurationCommand({ Bucket: bucket, LifecycleConfiguration: { Rules: remaining } }));
+        return toolJsonResult(
+          { bucket, removed: id, remaining_ids: remaining.map((r) => r.ID ?? "(no id)"), diff: diffRules(current, remaining) },
+          config.MAX_OUTPUT_CHARS,
+        );
       }, { config, bucket, region }),
   );
 

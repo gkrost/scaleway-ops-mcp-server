@@ -28,23 +28,29 @@ const putSchema = {
       "The COMPLETE bucket policy document as a JSON string (not a JS object) - this call REPLACES the entire " +
         "existing policy, it does not merge. To add a statement without losing existing grants, call " +
         "scaleway_s3_get_bucket_policy first, add your statement to its Statement array, then PUT the merged " +
-        "document. Known gotcha: 's3:HeadObject' is NOT a valid action here (HeadObject/HeadBucket calls are " +
-        "authorized via 's3:GetObject'/'s3:ListBucket' respectively) - submitting it fails with 'Policy has " +
-        "invalid action'. Despite the AWS-compatible API/SDK, 'Resource' entries are BARE bucket names, NOT ARNs - " +
-        "use 'my-bucket' and 'my-bucket/*', not 'arn:aws:s3:::my-bucket' (submitting an ARN fails with 'Policy has " +
-        "invalid resource', confirmed empirically 2026-08-18). To grant an application_id Principal, 'Version' " +
-        "must be '2023-04-17' (not AWS's '2012-10-17') - example: {\"Version\":\"2023-04-17\",\"Statement\":[{" +
+        "document - or use scaleway_s3_add_bucket_policy_statement, which merges server-side. Known gotcha: " +
+        "'s3:HeadObject' is NOT a valid action here (HeadObject/HeadBucket calls are authorized via " +
+        "'s3:GetObject'/'s3:ListBucket' respectively) - submitting it fails with 'Policy has invalid action'. " +
+        "Despite the AWS-compatible API/SDK, 'Resource' entries are BARE bucket names, NOT ARNs - use 'my-bucket' " +
+        "and 'my-bucket/*', not 'arn:aws:s3:::my-bucket' (submitting an ARN fails with 'Policy has invalid " +
+        "resource', confirmed empirically 2026-08-18). To grant an application_id Principal, 'Version' must be " +
+        "'2023-04-17' (not AWS's '2012-10-17') - example: {\"Version\":\"2023-04-17\",\"Statement\":[{" +
         "\"Sid\":\"Example\",\"Effect\":\"Allow\",\"Principal\":{\"SCW\":\"application_id:<uuid>\"}," +
         "\"Action\":[\"s3:GetObject\",\"s3:ListBucket\"],\"Resource\":[\"my-bucket\",\"my-bucket/*\"]}]}. Also " +
         "remember an IAM Policy (scaleway_iam_create_policy) granting the SAME principal project-wide access to " +
         "the relevant permission sets is required in addition to this bucket policy - a Bucket Policy alone is " +
         "not sufficient on Scaleway.",
     ),
+  dry_run: z
+    .boolean()
+    .default(false)
+    .describe("true: compute and return the statement-level diff (added/removed/changed vs the current policy) WITHOUT writing anything - no confirm needed."),
   confirm: z
     .literal(true)
+    .optional()
     .describe(
-      "Must be explicitly true. This replaces the entire bucket policy - a document granting Principal * or " +
-        "omitting the caller's own access takes effect immediately.",
+      "Must be explicitly true for a real write (unless dry_run: true). This replaces the entire bucket policy - " +
+        "a document granting Principal * or omitting the caller's own access takes effect immediately.",
     ),
 };
 
@@ -131,6 +137,42 @@ const statementSchema = z.object({
   resource: z.array(z.string().min(1)).min(1).describe("BARE bucket names / 'bucket/*' - NOT ARNs."),
 });
 
+/** By-Sid structural diff between the current policy's statements and a proposed set (#80). */
+function diffStatements(current: PolicyDoc | null, proposed: PolicyDoc): { added: string[]; removed: string[]; changed: string[]; unchanged: string[] } {
+  const keyOf = (s: unknown, i: number): string => {
+    const sid = (s as { Sid?: string } | null)?.Sid;
+    return typeof sid === "string" && sid.length > 0 ? sid : `(no-sid#${i})`;
+  };
+  const cur = new Map(((current?.Statement as unknown[]) ?? []).map((s, i) => [keyOf(s, i), s]));
+  const want = new Map(((proposed.Statement as unknown[]) ?? []).map((s, i) => [keyOf(s, i), s]));
+  const diff = { added: [] as string[], removed: [] as string[], changed: [] as string[], unchanged: [] as string[] };
+  for (const [sid, w] of want) {
+    const c = cur.get(sid);
+    if (!c) diff.added.push(sid);
+    else if (canon(c) === canon(w)) diff.unchanged.push(sid);
+    else diff.changed.push(sid);
+  }
+  for (const sid of cur.keys()) if (!want.has(sid)) diff.removed.push(sid);
+  return diff;
+}
+
+/** Deterministic JSON for structural comparison - key order must not create phantom diffs. */
+function canon(v: unknown): string {
+  const sort = (x: unknown): unknown => {
+    if (Array.isArray(x)) return x.map(sort);
+    if (x && typeof x === "object") {
+      return Object.fromEntries(
+        Object.entries(x as Record<string, unknown>)
+          .filter(([, val]) => val !== undefined)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([k, val]) => [k, sort(val)]),
+      );
+    }
+    return x;
+  };
+  return JSON.stringify(sort(v));
+}
+
 export function registerBucketPolicies(server: McpServer, config: Config) {
   server.registerTool(
     "scaleway_s3_get_bucket_policy",
@@ -154,7 +196,10 @@ export function registerBucketPolicies(server: McpServer, config: Config) {
     {
       title: "Set Scaleway Bucket Policy",
       description:
-        "Replace a bucket's entire Bucket Policy with the given JSON document. Requires confirm=true. This is the bucket-scoped half of " +
+        "Replace a bucket's entire Bucket Policy with the given JSON document. Requires confirm=true (dry_run: true computes a " +
+        "statement-level diff - added/removed/changed vs the current policy - without writing). For adding or removing single " +
+        "statements, prefer scaleway_s3_add_bucket_policy_statement / scaleway_s3_remove_bucket_policy_statement: they merge " +
+        "server-side and cannot silently revoke a grant by omission. This is the bucket-scoped half of " +
         "access control - see scaleway_iam_create_policy's description for why both an IAM Policy and a Bucket " +
         "Policy are needed together. Recommended safety net: include a statement granting the bucket owner's own " +
         "user_id full access (mirrors the console's 'Maintain access to bucket' checkbox) so a mistake here can " +
@@ -162,14 +207,35 @@ export function registerBucketPolicies(server: McpServer, config: Config) {
       inputSchema: putSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ bucket, region, policy_json, confirm }) => {
+    async ({ bucket, region, policy_json, confirm, dry_run }) => {
       if (!isValidJson(policy_json)) {
         return toolError("policy_json is not valid JSON - check for a missing/extra brace or comma before sending.");
       }
+      const proposed = JSON.parse(policy_json) as PolicyDoc;
+      if (!proposed || typeof proposed !== "object" || !Array.isArray(proposed.Statement)) {
+        return toolError("policy_json must be a policy document with a 'Statement' array - e.g. {\"Version\":\"2023-04-17\",\"Statement\":[...]}.");
+      }
       return handleS3(async () => {
         const client = getS3Client(config, region);
+        // Diff is computed on EVERY call (#80): dry_run gets it without writing, a real PUT echoes it
+        // so the caller sees exactly which grants it added, removed or rewrote.
+        const current = await readPolicyDoc(client, bucket);
+        const diff = diffStatements(current, proposed);
+        if (dry_run) {
+          return toolJsonResult(
+            { bucket, dry_run: true, nothing_written: true, diff, current_statement_count: (current?.Statement as unknown[])?.length ?? 0, proposed_statement_count: (proposed.Statement as unknown[]).length },
+            config.MAX_OUTPUT_CHARS,
+          );
+        }
+        if (confirm !== true) {
+          return toolError(
+            "Requires confirm: true - this REPLACES the entire bucket policy and any statement missing from policy_json is revoked " +
+              "(the diff of what would change is in scaleway_s3_put_bucket_policy's dry_run). Statement-level edits that never revoke: " +
+              "scaleway_s3_add_bucket_policy_statement / scaleway_s3_remove_bucket_policy_statement.",
+          ) as never;
+        }
         await client.send(new PutBucketPolicyCommand({ Bucket: bucket, Policy: policy_json }));
-        return toolJsonResult({ bucket, updated: true }, config.MAX_OUTPUT_CHARS);
+        return toolJsonResult({ bucket, updated: true, diff }, config.MAX_OUTPUT_CHARS);
       }, { config, bucket, region });
     },
   );
