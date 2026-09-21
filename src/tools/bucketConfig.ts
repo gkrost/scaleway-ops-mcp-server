@@ -22,6 +22,9 @@ import {
   DeleteBucketLifecycleCommand,
   DeleteBucketTaggingCommand,
   DeleteBucketWebsiteCommand,
+  S3ServiceException,
+  type LifecycleRule,
+  type S3Client,
 } from "@aws-sdk/client-s3";
 import type { Config } from "../config.js";
 import { getS3Client, handleS3 } from "../s3Client.js";
@@ -41,6 +44,91 @@ const regionField = scwRegionSchema.optional().describe("Region to operate in. D
 const confirmField = z.literal(true).describe("Must be explicitly true.");
 
 const ALL_USERS_URI = "http://acs.amazonaws.com/groups/global/AllUsers";
+
+/**
+ * One lifecycle rule as the put tool accepts it (#74). Element names follow Scaleway's lifecycle
+ * doc (docs-content pages/object-storage/api-cli/lifecycle-rules-api.mdx): Expiration.Days,
+ * Transition, NoncurrentVersionExpiration.NoncurrentDays, and
+ * AbortIncompleteMultipartUpload.DaysAfterInitiation are all documented there.
+ */
+const lifecycleRuleSchema = z
+  .object({
+    id: z.string().min(1),
+    enabled: z.boolean(),
+    prefix: z.string().optional().describe("Rule applies only to keys under this prefix. Omit for all objects."),
+    expiration_days: z.number().int().min(1).optional().describe("Permanently delete objects this many days after creation. Omit to keep. DESTRUCTIVE."),
+    noncurrent_expiration_days: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe(
+        "Versioned buckets: permanently delete an object version this many days after it becomes non-current " +
+          "(NoncurrentVersionExpiration.NoncurrentDays). DESTRUCTIVE. No effect on a bucket that was never versioned.",
+      ),
+    transitions: z
+      .array(z.object({ days: z.number().int().min(0), storage_class: z.enum(["ONEZONE_IA", "GLACIER"]) }))
+      .optional()
+      .describe("Move objects to a colder storage class after N days."),
+    abort_incomplete_multipart_days: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe(
+        "Abort multipart uploads still incomplete this many days after they were initiated, deleting the parts " +
+          "uploaded so far (AbortIncompleteMultipartUpload.DaysAfterInitiation). Deletes no committed object, but " +
+          "also kills a legitimate upload still running past this age. 1 is the usual value.",
+      ),
+  })
+  .refine(
+    (r) =>
+      r.expiration_days !== undefined ||
+      r.noncurrent_expiration_days !== undefined ||
+      r.abort_incomplete_multipart_days !== undefined ||
+      (r.transitions?.length ?? 0) > 0,
+    (r) => ({
+      message:
+        `Lifecycle rule '${r.id}' has no action - set at least one of expiration_days, noncurrent_expiration_days, ` +
+        "abort_incomplete_multipart_days, or a non-empty transitions list.",
+    }),
+  );
+
+type LifecycleRuleInput = z.infer<typeof lifecycleRuleSchema>;
+
+/** True when a requested rule's only action is aborting incomplete multipart uploads (no committed object is deleted). */
+function isAbortOnlyInput(r: LifecycleRuleInput): boolean {
+  return (
+    r.abort_incomplete_multipart_days !== undefined &&
+    r.expiration_days === undefined &&
+    r.noncurrent_expiration_days === undefined &&
+    (r.transitions?.length ?? 0) === 0
+  );
+}
+
+/**
+ * True when a rule currently on the bucket carries no action other than AbortIncompleteMultipartUpload, so a
+ * full-replace PUT that drops or rewrites it cannot stop any expiration or transition. Anything this server
+ * does not model (NoncurrentVersionTransitions, Expiration.Date, ExpiredObjectDeleteMarker) counts as "other".
+ */
+function isAbortOnlyExisting(r: LifecycleRule): boolean {
+  const e = r.Expiration;
+  const nve = r.NoncurrentVersionExpiration;
+  const expires = e !== undefined && (e.Days !== undefined || e.Date !== undefined || e.ExpiredObjectDeleteMarker !== undefined);
+  const noncurrentExpires = nve !== undefined && (nve.NoncurrentDays !== undefined || nve.NewerNoncurrentVersions !== undefined);
+  return !expires && !noncurrentExpires && (r.Transitions?.length ?? 0) === 0 && (r.NoncurrentVersionTransitions?.length ?? 0) === 0;
+}
+
+/** The bucket's current lifecycle rules, or [] when it has none (NoSuchLifecycleConfiguration). */
+async function currentLifecycleRules(client: S3Client, bucket: string): Promise<LifecycleRule[]> {
+  try {
+    const res = await client.send(new GetBucketLifecycleConfigurationCommand({ Bucket: bucket }));
+    return res.Rules ?? [];
+  } catch (err) {
+    if (err instanceof S3ServiceException && err.name === "NoSuchLifecycleConfiguration") return [];
+    throw err;
+  }
+}
 
 export function registerBucketConfig(server: McpServer, config: Config) {
   // ---------- Tagging ----------
@@ -331,7 +419,11 @@ export function registerBucketConfig(server: McpServer, config: Config) {
     "scaleway_s3_get_bucket_lifecycle",
     {
       title: "Get Scaleway bucket lifecycle rules",
-      description: "Read a bucket's lifecycle rules. Errors with NoSuchLifecycleConfiguration if none are set.",
+      description:
+        "Read a bucket's lifecycle rules. Errors with NoSuchLifecycleConfiguration if none are set. Each rule reports " +
+        "prefix, expiration_days, noncurrent_expiration_days, abort_incomplete_multipart_days (each null when absent) " +
+        "and transitions. Tag filters, noncurrent-version transitions and date-based expiration are NOT shown - a " +
+        "get -> put round trip through these tools drops them.",
       inputSchema: { bucket: bucketField, region: regionField },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -341,8 +433,11 @@ export function registerBucketConfig(server: McpServer, config: Config) {
         const rules = (res.Rules ?? []).map((r) => ({
           id: r.ID,
           status: r.Status,
-          prefix: r.Filter?.Prefix ?? null,
+          // An empty Prefix is Scaleway's documented "all objects" filter - report it as null, the same as none.
+          prefix: r.Filter?.Prefix || null,
           expiration_days: r.Expiration?.Days ?? null,
+          noncurrent_expiration_days: r.NoncurrentVersionExpiration?.NoncurrentDays ?? null,
+          abort_incomplete_multipart_days: r.AbortIncompleteMultipartUpload?.DaysAfterInitiation ?? null,
           transitions: (r.Transitions ?? []).map((t) => ({ days: t.Days, storage_class: t.StorageClass })),
         }));
         return toolJsonResult({ bucket, rules }, config.MAX_OUTPUT_CHARS);
@@ -354,40 +449,72 @@ export function registerBucketConfig(server: McpServer, config: Config) {
     {
       title: "Set Scaleway bucket lifecycle rules (full replace)",
       description:
-        "Set a bucket's lifecycle rules. FULL-REPLACE: the provided list becomes the complete rule set. DESTRUCTIVE: rules with expiration permanently DELETE matching objects once they take effect - requires confirm=true regardless of rule content. Rules apply to objects stored with Scaleway storage classes; transition targets Scaleway classes (ONEZONE_IA, GLACIER).",
+        "Set a bucket's lifecycle rules. FULL-REPLACE: the provided list becomes the bucket's COMPLETE rule set and " +
+        "every existing rule missing from it is REMOVED. A PUT carrying only an abort-incomplete-multipart rule " +
+        "therefore DELETES an existing expiration rule, and that retention silently stops. To add a rule, read the " +
+        "current set with scaleway_s3_get_bucket_lifecycle, merge, and PUT the merged list. " +
+        "Each rule needs at least one action: expiration_days and noncurrent_expiration_days permanently DELETE data " +
+        "once they take effect; transitions move objects to a colder Scaleway class (ONEZONE_IA, GLACIER); " +
+        "abort_incomplete_multipart_days aborts multipart uploads still unfinished that many days after initiation " +
+        "and deletes their parts, touching no committed object. " +
+        "Requires confirm=true, with one exception: when EVERY rule's only action is abort_incomplete_multipart_days " +
+        "AND the bucket's current rules (read before writing) carry no other action either, nothing committed can be " +
+        "deleted and no expiration/transition rule can be dropped, so confirm may be omitted.",
       inputSchema: {
         bucket: bucketField,
         region: regionField,
-        rules: z
-          .array(
-            z.object({
-              id: z.string().min(1),
-              enabled: z.boolean(),
-              prefix: z.string().optional().describe("Rule applies only to keys under this prefix. Omit for all objects."),
-              expiration_days: z.number().int().min(1).optional().describe("Permanently delete objects this many days after creation. Omit to keep."),
-              transitions: z
-                .array(z.object({ days: z.number().int().min(0), storage_class: z.enum(["ONEZONE_IA", "GLACIER"]) }))
-                .optional()
-                .describe("Move objects to a colder storage class after N days."),
-            }),
-          )
-          .min(1),
-        confirm: confirmField,
+        rules: z.array(lifecycleRuleSchema).min(1),
+        confirm: confirmField
+          .optional()
+          .describe(
+            "Must be explicitly true, unless every rule is abort-incomplete-multipart only and the bucket's current " +
+              "rules are too (see the tool description).",
+          ),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
     },
-    async ({ bucket, region, rules, }) =>
+    async ({ bucket, region, rules, confirm }) =>
       handleS3(async () => {
-        await getS3Client(config, region).send(
+        const client = getS3Client(config, region);
+        if (confirm !== true) {
+          const gated = rules.filter((r) => !isAbortOnlyInput(r)).map((r) => r.id);
+          if (gated.length > 0) {
+            return toolError(
+              `Requires confirm: true - rule(s) ${gated.join(", ")} carry an action other than ` +
+                "abort_incomplete_multipart_days (expiration_days / noncurrent_expiration_days permanently DELETE " +
+                "data; transitions move objects to a colder class). Only an abort-only rule set can skip confirm.",
+            ) as never;
+          }
+          // Abort-only request: it still FULL-REPLACES, so read the current rules and refuse if it would drop one
+          // that expires or transitions anything - the silent-drop trap #80 describes. Same read-first shape as
+          // put_object's HEAD-before-overwrite check, with the same (accepted) window between the read and the write.
+          const dropped = (await currentLifecycleRules(client, bucket)).filter((r) => !isAbortOnlyExisting(r)).map((r) => r.ID ?? "(no id)");
+          if (dropped.length > 0) {
+            return toolError(
+              `Requires confirm: true - FULL-REPLACE: this PUT would REMOVE the bucket's existing rule(s) ` +
+                `${dropped.join(", ")}, which carry actions other than aborting incomplete multipart uploads ` +
+                "(expiration, noncurrent expiration or transitions - they would silently stop). To " +
+                "keep them, read them with scaleway_s3_get_bucket_lifecycle, include them in 'rules' and pass " +
+                "confirm: true. To drop them deliberately, pass confirm: true.",
+            ) as never;
+          }
+        }
+        await client.send(
           new PutBucketLifecycleConfigurationCommand({
             Bucket: bucket,
             LifecycleConfiguration: {
               Rules: rules.map((r) => ({
                 ID: r.id,
                 Status: r.enabled ? "Enabled" : "Disabled",
-                Filter: r.prefix ? { Prefix: r.prefix } : undefined,
+                // Scaleway documents an empty Prefix as "applies to all objects" and uses exactly this form in its
+                // own abort-incomplete-multipart example; sending no Filter at all is undocumented there.
+                Filter: { Prefix: r.prefix ?? "" },
                 Expiration: r.expiration_days ? { Days: r.expiration_days } : undefined,
+                NoncurrentVersionExpiration: r.noncurrent_expiration_days ? { NoncurrentDays: r.noncurrent_expiration_days } : undefined,
                 Transitions: r.transitions?.map((t) => ({ Days: t.days, StorageClass: t.storage_class })),
+                AbortIncompleteMultipartUpload: r.abort_incomplete_multipart_days
+                  ? { DaysAfterInitiation: r.abort_incomplete_multipart_days }
+                  : undefined,
               })),
             },
           }),

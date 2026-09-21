@@ -459,18 +459,40 @@ try {
   console.log("visibility: private -> public verified (AllUsers grant present:", JSON.stringify(vis1.grants.some((g) => g.grantee?.includes("AllUsers"))), ")");
   console.log("visibility private again:", text(await client.callTool({ name: "scaleway_s3_set_bucket_visibility", arguments: { bucket: cfgBucket, visibility: "private" } })).slice(0, 80));
 
-  // --- lifecycle ---
+  // --- lifecycle (bucket is versioned at this point, so noncurrent expiration is meaningful) ---
+  await expectError("scaleway_s3_put_bucket_lifecycle", { bucket: cfgBucket, rules: [{ id: "no-action", enabled: true }], confirm: true }, "action-less lifecycle rule rejected");
   expectJson(
     await client.callTool({
       name: "scaleway_s3_put_bucket_lifecycle",
-      arguments: { bucket: cfgBucket, rules: [{ id: "expire-probe", enabled: true, prefix: "probe/", expiration_days: 1 }], confirm: true },
+      arguments: {
+        bucket: cfgBucket,
+        rules: [
+          { id: "expire-probe", enabled: true, prefix: "probe/", expiration_days: 1, noncurrent_expiration_days: 1 },
+          { id: "abort-mpu", enabled: true, abort_incomplete_multipart_days: 1 },
+        ],
+        confirm: true,
+      },
     }),
     "put_bucket_lifecycle",
   );
   const lc = expectJson(await client.callTool({ name: "scaleway_s3_get_bucket_lifecycle", arguments: { bucket: cfgBucket } }), "get_bucket_lifecycle");
-  if (lc.rules.length !== 1 || lc.rules[0].expiration_days !== 1) { console.error("FAILED: lifecycle echo mismatch"); process.exit(1); }
-  console.log("lifecycle get: rule echoed");
+  const lcExpire = lc.rules.find((r) => r.id === "expire-probe");
+  const lcAbort = lc.rules.find((r) => r.id === "abort-mpu");
+  if (lc.rules.length !== 2 || lcExpire?.expiration_days !== 1 || lcExpire?.noncurrent_expiration_days !== 1 || lcAbort?.abort_incomplete_multipart_days !== 1) {
+    console.error("FAILED: lifecycle echo mismatch", JSON.stringify(lc.rules));
+    process.exit(1);
+  }
+  console.log("lifecycle get: expiration + noncurrent-expiration + abort-MPU rules echoed");
+  // #74 gate: an abort-only PUT without confirm is refused while it would full-replace away expire-probe...
+  await expectError("scaleway_s3_put_bucket_lifecycle", { bucket: cfgBucket, rules: [{ id: "abort-mpu", enabled: true, abort_incomplete_multipart_days: 2 }] }, "abort-only put without confirm rejected while it would drop an expiration rule");
   console.log("lifecycle delete:", text(await client.callTool({ name: "scaleway_s3_delete_bucket_lifecycle", arguments: { bucket: cfgBucket, confirm: true } })).slice(0, 80));
+  // ...and accepted without confirm once the bucket has no rules it could drop.
+  expectJson(
+    await client.callTool({ name: "scaleway_s3_put_bucket_lifecycle", arguments: { bucket: cfgBucket, rules: [{ id: "abort-mpu", enabled: true, abort_incomplete_multipart_days: 1 }] } }),
+    "abort-only put_bucket_lifecycle without confirm on a rule-less bucket",
+  );
+  console.log("lifecycle abort-only put without confirm: accepted on a rule-less bucket");
+  console.log("lifecycle delete (abort-only):", text(await client.callTool({ name: "scaleway_s3_delete_bucket_lifecycle", arguments: { bucket: cfgBucket, confirm: true } })).slice(0, 80));
 
   // --- encryption (declarative) ---
   console.log("encryption put:", text(await client.callTool({ name: "scaleway_s3_put_bucket_encryption", arguments: { bucket: cfgBucket, algorithm: "AES256" } })).slice(0, 80));
