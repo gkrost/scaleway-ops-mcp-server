@@ -157,9 +157,9 @@ Or from a local clone/build, useful for development or pinning to an unreleased 
 - Temporary grants (#77): `scaleway_s3_grant_temporary_access` mints an Allow statement whose Sid encodes the expiry epoch (`tmp-<epoch>-<rand>`); `scaleway_s3_revoke_expired_grants` previews (or, with confirm, removes) lapsed `tmp-*` statements across one bucket or the whole region.
 - `scaleway_s3_explain_access` (#73) - evaluate one action against a bucket's policy for THIS server's own principal: allowed/denied/no-matching-statement and by which Sid. On any AccessDenied, the S3 tools now append the same context to their error instead of a bare "Access Denied".
 
-**Object Storage Objects** (multipart/large-file UPLOAD is out of scope; copies over 5 GiB go multipart automatically)
+**Object Storage Objects** (multipart/large-file UPLOAD is out of scope; copies over 5 GB go multipart automatically)
 - `scaleway_s3_put_object`, `scaleway_s3_get_object`, `scaleway_s3_list_objects`, `scaleway_s3_head_object`, `scaleway_s3_copy_object`, `scaleway_s3_delete_object`, `scaleway_s3_delete_objects`
-- `scaleway_s3_copy_object` switches to a multipart copy (ranged `UploadPartCopy`, aborted on failure so no billed parts leak) above S3's 5 GiB single-request ceiling (#75). `scaleway_s3_copy_prefix` (#75) does bucket-to-bucket prefix sync with `rclone copy --ignore-existing` semantics, server-side: dry-run by default, skips existing keys, bounded by `max_objects` with a continuation token. One server-side copy needs a principal with read on the source AND write on the destination - with per-stage bucket policies that means an explicit temporary grant (#77).
+- `scaleway_s3_copy_object` switches to a multipart copy (ranged `UploadPartCopy`, aborted on failure so no billed parts leak) above S3's 5 GB single-request ceiling (#75). `scaleway_s3_copy_prefix` (#75) does bucket-to-bucket prefix sync with `rclone copy --ignore-existing` semantics, server-side: dry-run by default, skips existing keys, bounded by `max_objects` with a continuation token. One server-side copy needs a principal with read on the source AND write on the destination - with per-stage bucket policies that means an explicit temporary grant (#77).
 - Incomplete multipart uploads (#78): `scaleway_s3_list_multipart_uploads` (parts you pay for that no object listing shows; `include_parts: true` adds part count/bytes) and `scaleway_s3_abort_multipart_upload` (confirm-guarded; permanently deletes the uploaded parts).
 - `put_object`/`get_object` carry binary payloads as base64 (`encoding: "base64"`); decoded size is capped by `MAX_PUT_OBJECT_BYTES` / `MAX_GET_OBJECT_BYTES` respectively (default 5 MB). `get_object` auto-detects UTF-8 text vs. binary and returns `encoding` accordingly; objects over the get ceiling fail fast - use `scaleway_s3_generate_presigned_url`.
 - `scaleway_s3_get_object_tags`, `scaleway_s3_put_object_tags` (`put` replaces the whole tag set, same replace-not-merge semantics as `put_bucket_policy`)
@@ -189,7 +189,7 @@ Or from a local clone/build, useful for development or pinning to an unreleased 
 Deliberately narrow: IAM identity/policy management (Applications, human Users, and Groups),
 SSH Keys, JWTs, SAML/SCIM/Security Settings, Bucket Policies, bucket lifecycle and
 configuration, Object Storage object CRUD (put/get/list/head/copy/delete/tags/presigned URLs;
-copies above 5 GiB go multipart automatically, multipart upload remains out of scope), a
+copies above 5 GB go multipart automatically, multipart upload remains out of scope), a
 read-only access/keys security audit, and Audit Trail (event queries, alert rules, export jobs),
 because that's what
 actually caused friction so far. Not a general Scaleway API wrapper - no compute, databases,

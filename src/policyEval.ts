@@ -70,29 +70,33 @@ export function actionMatches(pattern: string, action: string): boolean {
   const p = pattern.toLowerCase();
   const a = action.toLowerCase();
   if (!p.includes("*")) return p === a;
-  const re = new RegExp(
+  const re = new RegExp(`^${
     p
       .split("*")
       .map((seg) => seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-      .join(".*"),
-  );
+      .join(".*")
+  }$`);
   return re.test(a);
 }
 
 /**
  * Object-level vs bucket-level action classification, by S3 naming convention: object ops end in
- * "Object" or name multipart uploads on an object's parts. ListMultipartUploads is a bucket-level
- * call despite the name - hence the explicit exclusion.
+ * "Object", or operate on the parts of one object. ListMultipartUploads is a bucket-level call
+ * despite the name - hence the explicit exclusion.
  */
 export function isObjectAction(action: string): boolean {
   const a = action.toLowerCase();
   if (a === "s3:listmultipartuploads") return false;
-  return a.endsWith("object") || a.endsWith("objectversion") || (a.includes("multipartupload") && !a.endsWith("uploads"));
+  return (
+    a.endsWith("object") ||
+    a.endsWith("objectversion") ||
+    ["s3:abortmultipartupload", "s3:completemultipartupload", "s3:createmultipartupload", "s3:listparts", "s3:uploadpart", "s3:uploadpartcopy"].includes(a)
+  );
 }
 
-/** True when `resource` covers an object-level operation in `bucket` ("bucket/*" or the bare name). */
+/** True when `resource` covers an object-level operation in `bucket` ("bucket/*"). */
 export function resourceCoversObject(bucket: string, resource: string): boolean {
-  return resource === `${bucket}/*` || resource === bucket || resource === `${bucket}/`;
+  return resource === `${bucket}/*`;
 }
 
 /** True when `resource` covers a bucket-level operation (the bare bucket name). */
@@ -132,9 +136,7 @@ export function evaluatePolicyAction(policy: ParsedPolicy, bucket: string, actio
   for (const st of policy.statements) {
     const principalMatch = st.principals.includes("*") || st.principals.includes(principalId);
     const actionMatch = st.actions.some((a) => actionMatches(a, action));
-    const resourceMatch = st.resources.some((r) =>
-      objectLevel ? resourceCoversObject(bucket, r) || resourceCoversBucket(bucket, r) : resourceCoversBucket(bucket, r) || resourceCoversObject(bucket, r),
-    );
+    const resourceMatch = st.resources.some((r) => (objectLevel ? resourceCoversObject(bucket, r) : resourceCoversBucket(bucket, r)));
     if (principalMatch && actionMatch && resourceMatch) {
       matched.push({ sid: st.sid, effect: st.effect, principalMatch, actionMatch, resourceMatch });
     }

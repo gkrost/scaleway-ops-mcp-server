@@ -14,6 +14,14 @@ export interface OwnPrincipal {
   expires_at: string | null;
 }
 
+/** Canonical policy principal for an API key. User-owned keys are not applications. */
+export function ownPrincipalId(principal: OwnPrincipal): string {
+  if (principal.application_id) return `application_id:${principal.application_id}`;
+  if (principal.user_id) return `user_id:${principal.user_id}`;
+  // This should not normally be needed, but preserves a useful identity when IAM returns neither owner field.
+  return `access_key:${principal.access_key}`;
+}
+
 interface ApiKeyShape {
   application_id?: string;
   user_id?: string;

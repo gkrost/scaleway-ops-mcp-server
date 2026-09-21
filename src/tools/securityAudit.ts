@@ -7,7 +7,7 @@ import { getS3Client, handleS3 } from "../s3Client.js";
 import { IamApiError, iamListAll, iamRequest } from "../iamClient.js";
 import { toolJsonResult, toolError } from "../output.js";
 import { resolveOwnPrincipal } from "../ownPrincipal.js";
-import { parseBucketPolicy, principalIds, type PolicyStatement } from "../policyEval.js";
+import { actionMatches, parseBucketPolicy, principalIds, type PolicyStatement } from "../policyEval.js";
 import { scwRegionSchema } from "../scwRegion.js";
 
 /**
@@ -58,7 +58,15 @@ function bucketIsDevish(name: string): boolean {
  * Dangerous (delete/abort/policy-rewriting) S3 actions in a statement - flagged wherever they are
  * granted, since "who is the bucket owner" is not resolvable from the policy document itself.
  */
-const DANGEROUS_ACTIONS = /^(s3:(DeleteObject|DeleteBucket|AbortMultipartUpload|PutBucketPolicy|DeleteBucketPolicy|PutBucketAcl|BypassGovernanceRetention))$/i;
+const DANGEROUS_ACTIONS = [
+  "s3:DeleteObject",
+  "s3:DeleteBucket",
+  "s3:AbortMultipartUpload",
+  "s3:PutBucketPolicy",
+  "s3:DeleteBucketPolicy",
+  "s3:PutBucketAcl",
+  "s3:BypassGovernanceRetention",
+];
 
 /** A statement mentioning "*" as principal, or granting destructive actions. */
 function dangerousStatements(statements: PolicyStatement[]): { statement: PolicyStatement; kind: "star-principal" | "destructive-actions" }[] {
@@ -66,16 +74,14 @@ function dangerousStatements(statements: PolicyStatement[]): { statement: Policy
   for (const st of statements) {
     if ((st.effect ?? "").toLowerCase() !== "allow") continue;
     if (st.principals.includes("*")) out.push({ statement: st, kind: "star-principal" });
-    else if (st.actions.some((a) => DANGEROUS_ACTIONS.test(a))) out.push({ statement: st, kind: "destructive-actions" });
+    else if (st.actions.some((pattern) => DANGEROUS_ACTIONS.some((action) => actionMatches(pattern, action)))) out.push({ statement: st, kind: "destructive-actions" });
   }
   return out;
 }
 
 const auditSchema = {
   scope: z.enum(["all", "buckets", "keys"]).default("all").describe("Limit the audit to bucket-policy findings, API-key findings, or both (default)."),
-  region: z
-    .string()
-    .optional()
+  region: scwRegionSchema.optional()
     .describe("Region whose buckets to audit. Defaults to the server's configured region (fr-par). Buckets are region-scoped on Scaleway; IAM reads are org-wide."),
 };
 
@@ -225,7 +231,7 @@ async function runAudit(config: Config, scope: "all" | "buckets" | "keys", regio
                   area: "buckets",
                   resource: bucket,
                   code: "destructive-actions-granted",
-                  detail: `Statement '${sid}' grants destructive action(s) ${d.statement.actions.filter((a) => DANGEROUS_ACTIONS.test(a)).join(", ")} to ${d.statement.principals.join(", ")}. Check each principal needs delete/abort capability on this bucket.`,
+                  detail: `Statement '${sid}' grants destructive action pattern(s) ${d.statement.actions.filter((pattern) => DANGEROUS_ACTIONS.some((action) => actionMatches(pattern, action))).join(", ")} to ${d.statement.principals.join(", ")}. Check each principal needs delete/abort capability on this bucket.`,
                 });
               }
             }
@@ -276,14 +282,24 @@ async function runAudit(config: Config, scope: "all" | "buckets" | "keys", regio
         for (const id of [...unresolvedUserIds].slice(0, 50)) {
           try {
             await iamRequest<{ id: string }>(config, "GET", `/users/${id}`);
-          } catch {
-            findings.push({
-              severity: "medium",
-              area: "buckets",
-              resource: id,
-              code: "dangling-principal",
-              detail: `A bucket policy grants to user_id:${id}, which could not be resolved (deleted or foreign user). Remove the statement (scaleway_s3_remove_bucket_policy_statement).`,
-            });
+          } catch (err) {
+            if (err instanceof IamApiError && err.status === 404) {
+              findings.push({
+                severity: "medium",
+                area: "buckets",
+                resource: id,
+                code: "dangling-principal",
+                detail: `A bucket policy grants to user_id:${id}, which no longer exists. Remove the statement (scaleway_s3_remove_bucket_policy_statement).`,
+              });
+            } else {
+              findings.push({
+                severity: "info",
+                area: "buckets",
+                resource: id,
+                code: "principal-unverified",
+                detail: `Could not verify user_id:${id} (${err instanceof Error ? err.message : String(err)}); it is not being reported as dangling.`,
+              });
+            }
           }
         }
         findings.sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity));

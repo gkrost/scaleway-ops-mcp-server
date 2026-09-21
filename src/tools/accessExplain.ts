@@ -4,7 +4,7 @@ import { GetBucketPolicyCommand } from "@aws-sdk/client-s3";
 import type { Config } from "../config.js";
 import { getS3Client, handleS3 } from "../s3Client.js";
 import { toolJsonResult, toolError } from "../output.js";
-import { resolveOwnPrincipal } from "../ownPrincipal.js";
+import { ownPrincipalId, resolveOwnPrincipal } from "../ownPrincipal.js";
 import { evaluatePolicyAction, parseBucketPolicy } from "../policyEval.js";
 import { scwRegionSchema } from "../scwRegion.js";
 import { scwBucketNameSchema } from "../scwBucket.js";
@@ -50,7 +50,7 @@ export function registerAccessExplain(server: McpServer, config: Config) {
             `Could not resolve this server's own principal from its operating credential (IAM GET /api-keys failed: ${err instanceof Error ? err.message : String(err)}).`,
           );
         }
-        const ownPrincipal = own.application_id ? `application_id:${own.application_id}` : `access_key:${own.access_key}`;
+        const ownPrincipal = ownPrincipalId(own);
         const client = getS3Client(config, region);
         let policyJson: string | null = null;
         try {

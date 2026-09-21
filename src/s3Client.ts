@@ -1,7 +1,7 @@
 import { S3Client, S3ServiceException, GetBucketPolicyCommand } from "@aws-sdk/client-s3";
 import type { Config } from "./config.js";
 import { toolError } from "./output.js";
-import { resolveOwnPrincipal } from "./ownPrincipal.js";
+import { ownPrincipalId, resolveOwnPrincipal } from "./ownPrincipal.js";
 import { parseBucketPolicy, principalIds } from "./policyEval.js";
 
 /**
@@ -47,7 +47,7 @@ async function explainAccessDenied(ctx: BucketCallContext): Promise<string> {
   const parts: string[] = [];
   try {
     const own = await resolveOwnPrincipal(ctx.config);
-    const who = own.application_id ? `application_id:${own.application_id}` : `access_key:${own.access_key}`;
+    const who = ownPrincipalId(own);
     parts.push(`This call ran as ${who}.`);
   } catch {
     // Cannot resolve the own principal - still try the policy read below.
@@ -61,11 +61,15 @@ async function explainAccessDenied(ctx: BucketCallContext): Promise<string> {
       parts.push(`Bucket ${ctx.bucket} has a Bucket Policy with no principals in any statement.`);
     } else {
       const own = await resolveOwnPrincipal(ctx.config).catch(() => null);
-      const ownAppId = own?.application_id ?? null;
-      const listed = ownAppId ? ids.includes(`application_id:${ownAppId}`) : false;
+      const ownId = own ? ownPrincipalId(own) : null;
+      const listed = ownId === null ? null : ids.includes(ownId);
       parts.push(
         `Bucket ${ctx.bucket} has a Bucket Policy granting to: ${ids.join(", ")} - ` +
-          (listed ? `this server's principal IS listed, so the denial likely comes from the IAM layer (the principal's project-scope permission sets) or a Deny statement.` : `this server's principal is NOT listed, so the policy itself excludes it.`),
+          (listed === null
+            ? "this server's principal could not be resolved, so the policy cannot be compared to it."
+            : listed
+              ? `this server's principal IS listed, so the denial likely comes from the IAM layer (the principal's project-scope permission sets) or a Deny statement.`
+              : `this server's principal is NOT listed, so the policy itself excludes it.`),
       );
     }
   } catch (err) {
@@ -83,7 +87,7 @@ async function explainAccessDenied(ctx: BucketCallContext): Promise<string> {
  * Pass a BucketCallContext so an AccessDenied (#73) can explain itself against the bucket's policy. */
 export async function handleS3<T>(
   fn: () => Promise<T>,
-  ctx?: BucketCallContext,
+  ctx?: BucketCallContext | BucketCallContext[],
 ): Promise<T | ReturnType<typeof toolError>> {
   try {
     return await fn();
@@ -91,7 +95,11 @@ export async function handleS3<T>(
     if (err instanceof S3ServiceException) {
       let message = `Scaleway Object Storage error (${err.name}): ${err.message}`;
       if (err.name === "AccessDenied" && ctx) {
-        message += await explainAccessDenied(ctx);
+        // A cross-bucket copy requires permissions on both sides. We cannot infer which S3 call
+        // raised the generic AccessDenied, so show both policy contexts rather than falsely
+        // attributing every source failure to the destination bucket.
+        const contexts = Array.isArray(ctx) ? ctx : [ctx];
+        message += (await Promise.all(contexts.map(explainAccessDenied))).join("");
       }
       return toolError(message) as unknown as T;
     }

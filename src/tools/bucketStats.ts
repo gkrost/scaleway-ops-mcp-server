@@ -142,8 +142,18 @@ async function aggregateObjects(
 interface LifecycleSummary {
   bucket: string;
   has_configuration: boolean;
-  rules: { id: string; status: string; expiration_days: number | null; abort_incomplete_multipart_days: number | null }[];
+  read_error: string | null;
+  rules: {
+    id: string;
+    status: string;
+    expiration_days: number | null;
+    expiration_date: Date | null;
+    expired_object_delete_marker: boolean;
+    has_prefix_or_filter: boolean;
+    abort_incomplete_multipart_days: number | null;
+  }[];
   enabled_expiration_days: number[];
+  enabled_expiration_rule_count: number;
   enabled_abort_multipart: boolean;
 }
 
@@ -164,13 +174,18 @@ async function summarizeLifecycle(client: S3Client, bucket: string): Promise<Lif
   return {
     bucket,
     has_configuration: hasConfiguration,
+    read_error: null,
     rules: rules.map((r) => ({
       id: r.ID ?? "(no id)",
       status: r.Status ?? "?",
       expiration_days: r.Expiration?.Days ?? null,
+      expiration_date: r.Expiration?.Date ?? null,
+      expired_object_delete_marker: r.Expiration?.ExpiredObjectDeleteMarker === true,
+      has_prefix_or_filter: Boolean(r.Prefix || r.Filter),
       abort_incomplete_multipart_days: r.AbortIncompleteMultipartUpload?.DaysAfterInitiation ?? null,
     })),
     enabled_expiration_days: enabled.map((r) => r.Expiration?.Days).filter((d): d is number => typeof d === "number"),
+    enabled_expiration_rule_count: enabled.filter((r) => r.Expiration?.Days !== undefined || r.Expiration?.Date !== undefined).length,
     enabled_abort_multipart: enabled.some((r) => r.AbortIncompleteMultipartUpload !== undefined),
   };
 }
@@ -237,7 +252,7 @@ export function registerBucketStats(server: McpServer, config: Config) {
         "Read-only. For one bucket or every bucket in the region, flag: no lifecycle configuration at all; no ENABLED expiration rule " +
         "(objects never expire); no ENABLED abort-incomplete-multipart rule (failed multipart uploads leave billed parts forever); disabled " +
         "rules that look like switched-off retention. With bucket + check_objects=true it also lists the bucket's objects (cap 100,000) and " +
-        "flags retention drift: the oldest object is older than the smallest enabled expiration_days allows. Reports only - changing anything " +
+        "checks retention drift only for bucket-wide day-based rules: the oldest object is older than the smallest enabled expiration_days allows. Rules with a prefix/filter or calendar date are reported but not used for that heuristic. Reports only - changing anything " +
         "stays an explicit confirm-gated call (scaleway_s3_put_bucket_lifecycle / add_lifecycle_rule).",
       inputSchema: auditSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
@@ -252,21 +267,43 @@ export function registerBucketStats(server: McpServer, config: Config) {
         const findings: Finding[] = [];
         const summaries: LifecycleSummary[] = [];
         for (const b of buckets) {
-          const s = await summarizeLifecycle(client, b);
+          let s: LifecycleSummary;
+          try {
+            s = await summarizeLifecycle(client, b);
+          } catch (err) {
+            if (bucket) throw err;
+            s = {
+              bucket: b,
+              has_configuration: false,
+              read_error: err instanceof Error ? err.message : String(err),
+              rules: [],
+              enabled_expiration_days: [],
+              enabled_expiration_rule_count: 0,
+              enabled_abort_multipart: false,
+            };
+            summaries.push(s);
+            findings.push({
+              bucket: b,
+              severity: "info",
+              code: "lifecycle-unreadable",
+              detail: `Could not read lifecycle configuration (${s.read_error}); this bucket is UNVERIFIED, not compliant.`,
+            });
+            continue;
+          }
           summaries.push(s);
           if (!s.has_configuration) {
             findings.push({ bucket: b, severity: "medium", code: "no-lifecycle-rules", detail: "No lifecycle configuration: nothing ever expires and failed multipart uploads keep their parts forever." });
             continue;
           }
-          if (s.enabled_expiration_days.length === 0) {
-            const disabledWithExpiration = s.rules.filter((r) => r.expiration_days !== null && r.status !== "Enabled");
+          if (s.enabled_expiration_rule_count === 0) {
+            const disabledWithExpiration = s.rules.filter((r) => (r.expiration_days !== null || r.expiration_date !== null || r.expired_object_delete_marker) && r.status !== "Enabled");
             findings.push({
               bucket: b,
               severity: "medium",
               code: "no-enabled-expiration-rule",
               detail:
                 disabledWithExpiration.length > 0
-                  ? `No ENABLED expiration rule; ${disabledWithExpiration.map((r) => `'${r.id}' (${r.expiration_days}d, ${r.status})`).join(", ")} look like switched-off retention.`
+                  ? `No ENABLED expiration rule; ${disabledWithExpiration.map((r) => `'${r.id}' (${r.expiration_days ?? r.expiration_date ?? "delete-marker"}, ${r.status})`).join(", ")} look like switched-off retention.`
                   : "No ENABLED expiration rule: committed objects never expire.",
             });
           }
@@ -279,18 +316,22 @@ export function registerBucketStats(server: McpServer, config: Config) {
             });
           }
         }
-        let objectCheck: { bucket: string; oldest: Date | null; age_oldest_days: number | null; smallest_expiration_days: number | null } | null = null;
+        let objectCheck: { bucket: string; oldest: Date | null; age_oldest_days: number | null; smallest_expiration_days: number | null; retention_drift_evaluable: boolean } | null = null;
         if (bucket && check_objects) {
           const { totals, truncated } = await aggregateObjects(client, bucket, undefined, "none", 100_000);
-          const smallest = summaries.find((s) => s.bucket === bucket)?.enabled_expiration_days.length
-            ? Math.min(...(summaries.find((s) => s.bucket === bucket)?.enabled_expiration_days ?? []))
-            : null;
+          const summary = summaries.find((s) => s.bucket === bucket);
+          const dayRules = summary?.rules.filter((r) => r.status === "Enabled" && r.expiration_days !== null) ?? [];
+          // A bucket-wide oldest-object comparison cannot establish drift for prefix/filter-scoped
+          // rules (nor calendar-date expiration); reporting one as a high finding would be false.
+          const evaluable = dayRules.length > 0 && dayRules.every((r) => !r.has_prefix_or_filter) && (summary?.enabled_expiration_rule_count ?? 0) === dayRules.length;
+          const smallest = evaluable ? Math.min(...dayRules.map((r) => r.expiration_days as number)) : null;
           const ageOldest = totals.oldest ? ageDays(totals.oldest, Date.now()) : null;
           objectCheck = {
             bucket,
             oldest: totals.oldest,
             age_oldest_days: ageOldest,
             smallest_expiration_days: smallest,
+            retention_drift_evaluable: evaluable,
           };
           if (smallest !== null && ageOldest !== null && ageOldest > smallest) {
             findings.push({
@@ -298,6 +339,14 @@ export function registerBucketStats(server: McpServer, config: Config) {
               severity: "high",
               code: "retention-drift",
               detail: `Oldest object is ${ageOldest} days old but the smallest enabled expiration rule is ${smallest} days - objects are outliving the rule (${truncated ? "scanned first 100,000 objects" : "all objects scanned"}).`,
+            });
+          }
+          if (!evaluable && (summary?.enabled_expiration_rule_count ?? 0) > 0) {
+            findings.push({
+              bucket,
+              severity: "info",
+              code: "retention-drift-not-evaluated",
+              detail: "Retention drift was not evaluated because enabled expiration rules use a prefix/filter or calendar date; a bucket-wide oldest-object comparison would be misleading.",
             });
           }
           if (truncated) {

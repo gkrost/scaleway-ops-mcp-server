@@ -59,13 +59,33 @@ async function objectExists(client: S3Client, bucket: string, key: string): Prom
   }
 }
 
-/** S3's single-request ceiling - same as a single PUT; above it a copy must go multipart (#75). */
-const SINGLE_PART_COPY_MAX_BYTES = 5 * 1024 ** 3;
+/** S3's single-request ceiling: 5 GB (decimal); above it a copy must go multipart (#75). */
+const SINGLE_PART_COPY_MAX_BYTES = 5 * 1000 ** 3;
 /** 512 MiB parts: 10,000 parts x 512 MiB = exactly S3's 5 TB object maximum, so no sizing math needed. */
 const MULTIPART_COPY_PART_BYTES = 512 * 1024 ** 2;
 
+// ListObjectsV2 tokens resume at page boundaries only. This private cursor preserves the last
+// inspected key when max_objects stops in the middle of a page; accepting a raw S3 token keeps
+// compatibility with results produced before this cursor format existed.
+const COPY_PREFIX_START_AFTER = "mcp-copy-prefix-start-after:";
+
+function decodeCopyPrefixCursor(cursor: string | undefined): { continuationToken?: string; startAfter?: string } {
+  if (!cursor?.startsWith(COPY_PREFIX_START_AFTER)) return { continuationToken: cursor };
+  try {
+    const startAfter = Buffer.from(cursor.slice(COPY_PREFIX_START_AFTER.length), "base64url").toString("utf8");
+    return startAfter ? { startAfter } : {};
+  } catch {
+    // Let S3 reject a malformed legacy/raw cursor in the normal error shape rather than silently restarting.
+    return { continuationToken: cursor };
+  }
+}
+
+function encodeCopyPrefixCursor(startAfter: string): string {
+  return `${COPY_PREFIX_START_AFTER}${Buffer.from(startAfter, "utf8").toString("base64url")}`;
+}
+
 /**
- * Server-side copy of one object, single-request below 5 GiB and a multipart copy
+ * Server-side copy of one object, single-request up to 5 GB and a multipart copy
  * (CreateMultipartUpload -> ranged UploadPartCopy -> Complete) above it. On any failure after the
  * multipart upload was created, the upload is aborted so no billed parts are left behind.
  */
@@ -429,7 +449,7 @@ export function registerObjects(server: McpServer, config: Config) {
     {
       title: "Copy an object within or across Scaleway Object Storage buckets",
       description:
-        "Server-side copy of one object to a new bucket/key, without downloading and re-uploading. Copies over 5 GiB " +
+        "Server-side copy of one object to a new bucket/key, without downloading and re-uploading. Copies over 5 GB " +
         "(S3's single-request ceiling) go through a multipart copy automatically - ranged part copies, aborted (no " +
         "billed parts left) on failure. Source and destination must be in the same region. Requires confirm=true when " +
         "the destination key already exists (checked with a HEAD before copying) - copying to a new key needs no confirm. " +
@@ -450,7 +470,7 @@ export function registerObjects(server: McpServer, config: Config) {
           ) as never;
         }
         // Source HEAD is free metadata here (already needed for the overwrite check pattern) and decides
-        // the copy path: single request up to 5 GiB, multipart copy above it (#75).
+        // the copy path: single request up to 5 GB, multipart copy above it (#75).
         const srcHead = await client.send(new HeadObjectCommand({ Bucket: source_bucket, Key: source_key }));
         const copy = await copyObjectServerSide(client, source_bucket, source_key, dest_bucket, dest_key, srcHead.ContentLength);
         return toolJsonResult(
@@ -469,7 +489,7 @@ export function registerObjects(server: McpServer, config: Config) {
           },
           config.MAX_OUTPUT_CHARS,
         );
-      }, { config, bucket: dest_bucket, region }),
+      }, [{ config, bucket: source_bucket, region }, { config, bucket: dest_bucket, region }]),
   );
 
   server.registerTool(
@@ -479,7 +499,7 @@ export function registerObjects(server: McpServer, config: Config) {
       description:
         "Bucket-to-bucket copy with 'rclone copy --ignore-existing' semantics, server-side: pages both listings, copies the " +
         "objects missing from the destination, and reports copied / skipped_existing / failed. DRY RUN BY DEFAULT - without " +
-        "dry_run=false it only reports what WOULD be copied (count, bytes, sample keys). Copies >5 GiB go multipart " +
+        "dry_run=false it only reports what WOULD be copied (count, bytes, sample keys). Copies >5 GB go multipart " +
         "automatically. Bounded per call by max_objects; if the source listing has more, the result carries a " +
         "continuation_token to resume. Source and destination must be in the same region. NOTE on access: one server-side " +
         "copy needs a single principal with read on the source AND write on the destination - with per-stage Bucket " +
@@ -494,8 +514,8 @@ export function registerObjects(server: McpServer, config: Config) {
           .default(true)
           .describe("true (default): skip keys that already exist in the destination, never overwriting. false: overwrite differing keys - requires confirm."),
         dry_run: z.boolean().default(true).describe("true (default): report what would be copied without writing anything."),
-        max_objects: z.number().int().min(1).max(10_000).default(1000).describe("Max objects COPIED per call (skipped ones don't count). Resume past the cap with continuation_token."),
-        continuation_token: z.string().optional().describe("From a previous call's continuation_token, to resume the source listing past the max_objects cap."),
+        max_objects: z.number().int().min(1).max(10_000).default(1000).describe("Max source objects selected for copy per call (skipped-existing ones do not count). Resume past the cap with continuation_token."),
+        continuation_token: z.string().optional().describe("From a previous call's opaque continuation_token, to resume the source listing past the max_objects cap."),
         confirm: z.literal(true).optional().describe("Required true only when dry_run=false AND ignore_existing=false (that combination can overwrite destination objects)."),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
@@ -526,21 +546,30 @@ export function registerObjects(server: McpServer, config: Config) {
         let wouldCopyCount = 0;
         let wouldCopyBytes = 0;
         const sample: string[] = [];
-        let sourceToken = continuation_token;
+        const initialCursor = decodeCopyPrefixCursor(continuation_token);
+        let sourceToken = initialCursor.continuationToken;
+        let sourceStartAfter = initialCursor.startAfter;
+        let attempted = 0;
+        let lastVisitedKey: string | undefined;
         let exhausted = true;
         do {
-          const page = await client.send(new ListObjectsV2Command({ Bucket: source_bucket, Prefix: prefix, ContinuationToken: sourceToken, MaxKeys: 1000 }));
+          const page = await client.send(
+            new ListObjectsV2Command({ Bucket: source_bucket, Prefix: prefix, ContinuationToken: sourceToken, StartAfter: sourceStartAfter, MaxKeys: 1000 }),
+          );
+          sourceStartAfter = undefined;
           for (const o of page.Contents ?? []) {
             const key = o.Key;
             if (!key) continue;
+            if (attempted >= max_objects) {
+              exhausted = false;
+              break;
+            }
+            lastVisitedKey = key;
             if (ignore_existing && existingKeys.has(key)) {
               skipped.push(key);
               continue;
             }
-            if (copied.length + failed.length >= max_objects) {
-              exhausted = false;
-              break;
-            }
+            attempted += 1;
             if (dry_run) {
               wouldCopyCount += 1;
               wouldCopyBytes += o.Size ?? 0;
@@ -577,11 +606,11 @@ export function registerObjects(server: McpServer, config: Config) {
             failed: dry_run ? undefined : failed,
             failed_count: dry_run ? 0 : failed.length,
             source_fully_scanned: exhausted,
-            continuation_token: exhausted ? null : sourceToken ?? null,
+            continuation_token: exhausted ? null : lastVisitedKey ? encodeCopyPrefixCursor(lastVisitedKey) : sourceToken ?? null,
           },
           config.MAX_OUTPUT_CHARS,
         );
-      }, { config, bucket: dest_bucket, region }),
+      }, [{ config, bucket: source_bucket, region }, { config, bucket: dest_bucket, region }]),
   );
 
   server.registerTool(
@@ -732,11 +761,23 @@ export function registerObjects(server: McpServer, config: Config) {
         if (include_parts) {
           for (const u of uploads.slice(0, 50)) {
             try {
-              const parts = await client.send(new ListPartsCommand({ Bucket: bucket, Key: u.key, UploadId: u.upload_id }));
-              const list = parts.Parts ?? [];
-              u.parts = list.length;
-              u.bytes_uploaded = list.reduce((sum, p) => sum + (p.Size ?? 0), 0);
-              u.last_part_number = list.length > 0 ? (list[list.length - 1].PartNumber ?? null) : null;
+              let partNumberMarker: string | undefined;
+              let partCount = 0;
+              let bytesUploaded = 0;
+              let lastPartNumber: number | null = null;
+              do {
+                const page = await client.send(
+                  new ListPartsCommand({ Bucket: bucket, Key: u.key, UploadId: u.upload_id, PartNumberMarker: partNumberMarker, MaxParts: 1000 }),
+                );
+                const list = page.Parts ?? [];
+                partCount += list.length;
+                bytesUploaded += list.reduce((sum, p) => sum + (p.Size ?? 0), 0);
+                if (list.length > 0) lastPartNumber = list[list.length - 1].PartNumber ?? lastPartNumber;
+                partNumberMarker = page.IsTruncated ? page.NextPartNumberMarker : undefined;
+              } while (partNumberMarker !== undefined);
+              u.parts = partCount;
+              u.bytes_uploaded = bytesUploaded;
+              u.last_part_number = lastPartNumber;
             } catch {
               // ListParts can 404 if the upload completed/was aborted between the two calls - report the overview entry without part detail.
               u.parts = null;
