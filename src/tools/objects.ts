@@ -202,7 +202,7 @@ export function registerObjects(server: McpServer, config: Config) {
           { bucket, key, region: region ?? config.SCW_DEFAULT_REGION, size_bytes: body.byteLength, etag: res.ETag, uploaded: true, overwritten: overwriting },
           config.MAX_OUTPUT_CHARS,
         );
-      });
+      }, { config, bucket, region });
     },
   );
 
@@ -257,7 +257,7 @@ export function registerObjects(server: McpServer, config: Config) {
           },
           config.MAX_OUTPUT_CHARS,
         );
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -296,7 +296,7 @@ export function registerObjects(server: McpServer, config: Config) {
           },
           config.MAX_OUTPUT_CHARS,
         );
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -323,7 +323,7 @@ export function registerObjects(server: McpServer, config: Config) {
           },
           config.MAX_OUTPUT_CHARS,
         );
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -369,7 +369,7 @@ export function registerObjects(server: McpServer, config: Config) {
           },
           config.MAX_OUTPUT_CHARS,
         );
-      }),
+      }, { config, bucket: dest_bucket, region }),
   );
 
   server.registerTool(
@@ -385,7 +385,7 @@ export function registerObjects(server: McpServer, config: Config) {
         const client = getS3Client(config, region);
         await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
         return toolJsonResult({ bucket, key, deleted: true }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -411,7 +411,7 @@ export function registerObjects(server: McpServer, config: Config) {
           },
           config.MAX_OUTPUT_CHARS,
         );
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -428,7 +428,7 @@ export function registerObjects(server: McpServer, config: Config) {
         const res = await client.send(new GetObjectTaggingCommand({ Bucket: bucket, Key: key }));
         const tags = Object.fromEntries((res.TagSet ?? []).map((t) => [t.Key, t.Value]));
         return toolJsonResult({ bucket, key, tags }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -450,7 +450,7 @@ export function registerObjects(server: McpServer, config: Config) {
           }),
         );
         return toolJsonResult({ bucket, key, tags, updated: true }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -481,6 +481,6 @@ export function registerObjects(server: McpServer, config: Config) {
           { bucket, key, operation, url, expires_in_seconds, expires_at: new Date(Date.now() + expires_in_seconds * 1000).toISOString() },
           config.MAX_OUTPUT_CHARS,
         );
-      }),
+      }, { config, bucket, region }),
   );
 }

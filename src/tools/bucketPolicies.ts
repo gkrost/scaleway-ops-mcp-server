@@ -75,7 +75,7 @@ export function registerBucketPolicies(server: McpServer, config: Config) {
         const res = await client.send(new GetBucketPolicyCommand({ Bucket: bucket }));
         const policy = res.Policy ? JSON.parse(res.Policy) : null;
         return toolJsonResult({ bucket, policy }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -99,7 +99,7 @@ export function registerBucketPolicies(server: McpServer, config: Config) {
         const client = getS3Client(config, region);
         await client.send(new PutBucketPolicyCommand({ Bucket: bucket, Policy: policy_json }));
         return toolJsonResult({ bucket, updated: true }, config.MAX_OUTPUT_CHARS);
-      });
+      }, { config, bucket, region });
     },
   );
 
@@ -116,6 +116,6 @@ export function registerBucketPolicies(server: McpServer, config: Config) {
         const client = getS3Client(config, region);
         await client.send(new DeleteBucketPolicyCommand({ Bucket: bucket }));
         return toolJsonResult({ bucket, deleted: true }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 }

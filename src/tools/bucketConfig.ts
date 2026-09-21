@@ -144,7 +144,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
       handleS3(async () => {
         const res = await getS3Client(config, region).send(new GetBucketTaggingCommand({ Bucket: bucket }));
         return toolJsonResult({ bucket, tags: res.TagSet ?? [] }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -167,7 +167,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
           new PutBucketTaggingCommand({ Bucket: bucket, Tagging: { TagSet: tags.map((t) => ({ Key: t.key, Value: t.value })) } }),
         );
         return toolJsonResult({ bucket, applied: tags.length, tags }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -182,7 +182,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
       handleS3(async () => {
         await getS3Client(config, region).send(new DeleteBucketTaggingCommand({ Bucket: bucket }));
         return toolJsonResult({ bucket, deleted: true }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   // ---------- CORS ----------
@@ -205,7 +205,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
           max_age_seconds: r.MaxAgeSeconds,
         }));
         return toolJsonResult({ bucket, rules }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -250,7 +250,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
           }),
         );
         return toolJsonResult({ bucket, applied: rules.length, rules }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -265,7 +265,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
       handleS3(async () => {
         await getS3Client(config, region).send(new DeleteBucketCorsCommand({ Bucket: bucket }));
         return toolJsonResult({ bucket, deleted: true }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   // ---------- Versioning ----------
@@ -282,7 +282,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
       handleS3(async () => {
         const res = await getS3Client(config, region).send(new GetBucketVersioningCommand({ Bucket: bucket }));
         return toolJsonResult({ bucket, status: res.Status ?? "" }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -306,7 +306,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
         }
         await getS3Client(config, region).send(new PutBucketVersioningCommand({ Bucket: bucket, VersioningConfiguration: { Status: status } }));
         return toolJsonResult({ bucket, status }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   // ---------- Website ----------
@@ -326,7 +326,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
           { bucket, index_document: res.IndexDocument?.Suffix ?? null, error_document: res.ErrorDocument?.Key ?? null },
           config.MAX_OUTPUT_CHARS,
         );
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -353,7 +353,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
           }),
         );
         return toolJsonResult({ bucket, index_document, error_document: error_document ?? null }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -368,7 +368,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
       handleS3(async () => {
         await getS3Client(config, region).send(new DeleteBucketWebsiteCommand({ Bucket: bucket }));
         return toolJsonResult({ bucket, deleted: true }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   // ---------- Visibility (ACL) ----------
@@ -387,7 +387,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
         const grants = (res.Grants ?? []).map((g) => ({ grantee: g.Grantee?.URI ?? g.Grantee?.ID ?? null, permission: g.Permission }));
         const isPublic = grants.some((g) => g.grantee === ALL_USERS_URI);
         return toolJsonResult({ bucket, visibility: isPublic ? "public" : "private", grants }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -411,7 +411,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
         }
         await getS3Client(config, region).send(new PutBucketAclCommand({ Bucket: bucket, ACL: visibility }));
         return toolJsonResult({ bucket, visibility }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   // ---------- Lifecycle ----------
@@ -441,7 +441,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
           transitions: (r.Transitions ?? []).map((t) => ({ days: t.Days, storage_class: t.StorageClass })),
         }));
         return toolJsonResult({ bucket, rules }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -520,7 +520,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
           }),
         );
         return toolJsonResult({ bucket, applied: rules.length, rules }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -536,7 +536,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
       handleS3(async () => {
         await getS3Client(config, region).send(new DeleteBucketLifecycleCommand({ Bucket: bucket }));
         return toolJsonResult({ bucket, deleted: true }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   // ---------- Encryption ----------
@@ -556,7 +556,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
           algorithm: r.ApplyServerSideEncryptionByDefault?.SSEAlgorithm ?? null,
         }));
         return toolJsonResult({ bucket, rules, note: "empty rules = encryption 'Disabled' in the console; a rule present = an active SSE default, confirmed to actually toggle the console's Encryption type setting" }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -581,7 +581,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
           }),
         );
         return toolJsonResult({ bucket, algorithm }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -599,7 +599,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
       handleS3(async () => {
         await getS3Client(config, region).send(new DeleteBucketEncryptionCommand({ Bucket: bucket }));
         return toolJsonResult({ bucket, deleted: true }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   // ---------- Object Lock ----------
@@ -619,7 +619,7 @@ export function registerBucketConfig(server: McpServer, config: Config) {
           { bucket, object_lock_enabled: res.ObjectLockConfiguration?.ObjectLockEnabled ?? null },
           config.MAX_OUTPUT_CHARS,
         );
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -656,6 +656,6 @@ export function registerBucketConfig(server: McpServer, config: Config) {
           { bucket, object_lock_enabled: true, versioning_now: "Enabled", warning: "one-way: object lock can never be disabled on this bucket, and versioning can no longer be suspended" },
           config.MAX_OUTPUT_CHARS,
         );
-      }),
+      }, { config, bucket, region }),
   );
 }
