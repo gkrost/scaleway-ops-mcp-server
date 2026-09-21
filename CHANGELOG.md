@@ -4,6 +4,10 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- `scaleway_s3_put_bucket_lifecycle` can now express `AbortIncompleteMultipartUpload` (`abort_incomplete_multipart_days` → `DaysAfterInitiation`) and `NoncurrentVersionExpiration` (`noncurrent_expiration_days` → `NoncurrentDays`), and `scaleway_s3_get_bucket_lifecycle` returns both beside the existing fields (`null` when absent). Both elements are documented on Scaleway's lifecycle-rules API page. A failed multipart upload leaves parts that keep costing storage, and a writer whose bucket policy grants no `s3:AbortMultipartUpload` can only have them cleaned up by such a rule. A rule with no action at all is now rejected at schema validation instead of being sent to Scaleway (#74).
+- `scaleway_s3_put_bucket_lifecycle`'s `confirm` is no longer required when every rule's only action is `abort_incomplete_multipart_days` **and** the bucket's current rules, read before writing (the same read-first shape as `put_object`'s overwrite check), carry no other action either. In that case nothing committed can be deleted and no expiration/transition rule can be dropped. Every other case still needs `confirm=true`: any rule with `expiration_days`, `noncurrent_expiration_days` or `transitions`, and an abort-only PUT that would full-replace away an existing expiration/transition rule. The put is still FULL-REPLACE, and its description now says so plainly. Merge-aware add/remove is #80 (#74).
+- `scaleway_s3_put_bucket_lifecycle` now sends a rule without `prefix` as `Filter: { Prefix: "" }`, the "all objects" form Scaleway documents and uses in its own abort-incomplete-multipart example, instead of omitting `Filter`. `get_bucket_lifecycle` reports an empty prefix as `null`, so a prefix-less rule still reads back as `null` (#74).
+
 ## 0.2.0 (2026-08-20)
 
 Follow-up hardening pass after a multi-angle audit (static review of the full codebase plus live

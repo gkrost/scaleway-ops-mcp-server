@@ -144,7 +144,7 @@ Or from a local clone/build, useful for development or pinning to an unreleased 
 - Versioning: `scaleway_s3_get_bucket_versioning`, `scaleway_s3_set_bucket_versioning` (suspend needs confirm).
 - Website: `scaleway_s3_get/put/delete_bucket_website` (put publishes an endpoint, needs confirm).
 - Visibility: `scaleway_s3_get/set_bucket_visibility` - coarse public/private via canned ACL (public needs confirm; Bucket Policies are the fine-grained mechanism).
-- Lifecycle rules: `scaleway_s3_get/put/delete_bucket_lifecycle` (put/delete confirm-guarded - expiration rules permanently delete objects).
+- Lifecycle rules: `scaleway_s3_get/put/delete_bucket_lifecycle` - expiration, noncurrent-version expiration, transitions, and aborting incomplete multipart uploads (#74). Put is FULL-REPLACE: omitted rules are removed, so an abort-only put deletes an existing expiration rule. Put/delete are confirm-guarded (expiration and noncurrent expiration permanently delete data). The one exception is an abort-only put on a bucket whose current rules are abort-only too, checked by a read before writing; it needs no confirm.
 - Encryption config: `scaleway_s3_get/put/delete_bucket_encryption` - real, toggleable setting (console-confirmed), not inert metadata; see `docs/gotchas.md`.
 - Object Lock: `scaleway_s3_get_object_lock`, `scaleway_s3_enable_object_lock` (one-way: never disableable, versioning prerequisite handled, versioning frozen afterwards; create-time lock flag is silently ignored by Scaleway).
 - No tools for bucket logging or bucket metrics: Scaleway's S3 endpoint returns `NotImplemented` for both.
