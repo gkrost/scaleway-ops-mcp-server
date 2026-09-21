@@ -56,7 +56,7 @@ export function registerBuckets(server: McpServer, config: Config) {
         const client = getS3Client(config, region);
         await client.send(new CreateBucketCommand({ Bucket: bucket }));
         return toolJsonResult({ bucket, region: region ?? config.SCW_DEFAULT_REGION, created: true }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 
   server.registerTool(
@@ -89,6 +89,6 @@ export function registerBuckets(server: McpServer, config: Config) {
         const client = getS3Client(config, region);
         await client.send(new DeleteBucketCommand({ Bucket: bucket }));
         return toolJsonResult({ bucket, deleted: true }, config.MAX_OUTPUT_CHARS);
-      }),
+      }, { config, bucket, region }),
   );
 }
