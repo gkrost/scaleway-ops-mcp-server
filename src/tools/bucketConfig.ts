@@ -81,18 +81,21 @@ const lifecycleRuleSchema = z
           "also kills a legitimate upload still running past this age. 1 is the usual value.",
       ),
   })
-  .refine(
-    (r) =>
+  .superRefine((r, ctx) => {
+    const hasAction =
       r.expiration_days !== undefined ||
       r.noncurrent_expiration_days !== undefined ||
       r.abort_incomplete_multipart_days !== undefined ||
-      (r.transitions?.length ?? 0) > 0,
-    (r) => ({
-      message:
-        `Lifecycle rule '${r.id}' has no action - set at least one of expiration_days, noncurrent_expiration_days, ` +
-        "abort_incomplete_multipart_days, or a non-empty transitions list.",
-    }),
-  );
+      (r.transitions?.length ?? 0) > 0;
+    if (!hasAction) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          `Lifecycle rule '${r.id}' has no action - set at least one of expiration_days, noncurrent_expiration_days, ` +
+          "abort_incomplete_multipart_days, or a non-empty transitions list.",
+      });
+    }
+  });
 
 type LifecycleRuleInput = z.infer<typeof lifecycleRuleSchema>;
 
